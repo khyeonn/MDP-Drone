@@ -49,7 +49,7 @@ function POMDPs.transition(env::DroneEnv, state::DroneState, action::DroneAction
     y_new = state.y + v_new*sin(state.theta)
 
     # update heading angle
-    theta_new = state.theta + action.rotate
+    theta_new = state.theta + clamp(action.rotate, -env.max_rotation_speed, env.max_rotation_speed)
     theta_new = atan(sin(theta_new), cos(theta_new)) # limit to -π to π 
 
     return DroneState(x_new, y_new, v_new, theta_new)

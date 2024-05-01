@@ -4,7 +4,7 @@ using POMDPs
 
 export DroneEnv, DroneState, DroneAction
 
-const DEFAULT_SIZE = (50, 50)
+const DEFAULT_SIZE = (50.0, 50.0)
 
 struct DroneState
     x::Float64 
@@ -20,17 +20,23 @@ end
 
 struct DroneEnv
     size::Tuple{Int, Int}
+    goal::Tuple{Float64, Float64, Float64}
     max_velocity::Float64
     max_rotation_speed::Float64
     discount::Float64
+    # obstacles::Vector{Tuple{Float64, Float64, Float64}}
 end
 
 function DroneEnv(;size = DEFAULT_SIZE,
         max_velocity = 1.0,
         max_rotation_speed = 0.1,
-        discount = 0.95
+        discount = 0.95,
+        goal_radius = 5.0
         )
-    return DroneEnv(size, max_velocity, max_rotation_speed, discount)
+    step_size = 0.001
+    goal_x, goal_y = rand(1:step_size:size[1]), rand(1:step_size:size[2])
+    goal = (goal_x, goal_y, goal_radius)
+    return DroneEnv(size, goal, max_velocity, max_rotation_speed, discount)
 end
 
 

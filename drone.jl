@@ -1,4 +1,10 @@
+module Drone
+
 using POMDPs
+
+export DroneEnv, DroneState, DroneAction
+
+const DEFAULT_SIZE = (50, 50)
 
 struct DroneState
     x::Float64 
@@ -12,28 +18,45 @@ struct DroneAction
     rotate::Float64 # radians
 end
 
-struct DroneMDP
+struct DroneEnv
+    size::Tuple{Int, Int}
     max_velocity::Float64
     max_rotation_speed::Float64
     discount::Float64
 end
 
+function DroneEnv(;size = DEFAULT_SIZE,
+        max_velocity = 1.0,
+        max_rotation_speed = 0.1,
+        discount = 0.95
+        )
+    return DroneEnv(size, max_velocity, max_rotation_speed, discount)
+end
 
-function POMDPs.transition(mdp::DroneMDP, state::DroneState, action::DroneAction)
+
+function POMDPs.transition(env::DroneEnv, state::DroneState, action::DroneAction)
     # velocity update
-    v_new = clamp(state.v + a.accel, -mdp.max_velocity, mdp.max_velocity)
+    v_new = clamp(state.v + action.accel, -env.max_velocity, env.max_velocity)
 
     # update position
     x_new = state.x + v_new*cos(state.theta)
-    x_new = state.y + v_new*sin(state.theta)
+    y_new = state.y + v_new*sin(state.theta)
 
     # update heading angle
-    theta_new = state.theta + a.rotate
+    theta_new = state.theta + action.rotate
     theta_new = atan(sin(theta_new), cos(theta_new)) # limit to -π to π 
 
     return DroneState(x_new, y_new, v_new, theta_new)
 end
 
-function POMDPs.reward(mdp::DroneMD, state::DroneState, action::DroneAction)
-    
+function POMDPs.reward(state::DroneState, target)
+    distance_to_target = sqrt((state.x - target[1])^2 + (state.y - target[2])^2)
+
+    if distance_to_target < target[3]
+        return 100.0
+    else
+        return -0.1
+    end
 end
+
+end # module

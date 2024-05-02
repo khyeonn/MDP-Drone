@@ -65,6 +65,21 @@ function checkoutbounds(env::DroneEnv, s::DroneState)
     return false
 end
 
+function checkterminal(env,x,y)
+    x_max, y_max = env.size
+    for obstacle in env.obstacles
+        if x == obstacle[1] && y == obstacle[2]
+            return true
+        end
+    end
+    goal = (x == env.target[1] && y == env.target[2])
+    bound = x > x_max || x < 1 || y > y_max || y < 1
+    if goal || bound
+        return true
+    end
+    return false 
+end
+
 # transition function
 function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
     a = action
@@ -76,15 +91,17 @@ function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
         return SparseCat([DroneState(x, y, theta, true)], [1.0])
     end
 
-    ingoal = checkgoal(env, state)
-
+    e = x+1
+    b = x-1
+    c = y+1
+    d = y-1
     neighbors = [
-        DroneState(x+1, y, θ, ingoal) 
-        DroneState(x-1, y, θ, ingoal)
-        DroneState(x, y+1, θ, ingoal)
-        DroneState(x, y-1, θ, ingoal)
-        DroneState(x, y, mod(θ+pi/2,2*pi), ingoal) # set limit
-        DroneState(x, y, mod(maximum([θ-pi/2,θ+3*pi/2]),2*pi), ingoal) # set limit
+        DroneState(e, y, θ, checkterminal(env,e,y))
+        DroneState(b, y, θ, checkterminal(env,b,y))
+        DroneState(x, c, θ, checkterminal(env,x,c))
+        DroneState(x, d, θ, checkterminal(env,x,d))
+        DroneState(x, y, mod(θ+pi/2,2*pi), checkterminal(env,x,y))
+        DroneState(x, y, mod(maximum([θ-pi/2,θ+3*pi/2]),2*pi), checkterminal(env,x,y))
         ]
 
     probability = fill((1-env.tprob)/5, 6)
@@ -135,7 +152,7 @@ function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
             probability[2] = env.tprob
         end
     end
-
+    @show probability
     return SparseCat(neighbors, probability)
 end
 
@@ -175,13 +192,14 @@ function render(env::DroneEnv, state::DroneState)
     end
     plot!([env.target[1]], [env.target[2]], mark=:star, markersize=20, color=:yellow)
     plot!([state.x], [state.y], mark=:circle, markersize=20, color=:blue)
-    
+
     plot!([0.5, 0.5], [0.5, 10.5], color=:black, linewidth=2)  # (0.5,0.5) to (0.5,10.5)
     plot!([0.5, 10.5], [0.5, 0.5], color=:black, linewidth=2)  # (0.5,0.5) to (10.5,0.5)
     plot!([0.5, 10.5], [10.5, 10.5], color=:black, linewidth=2)  # (0.5,10.5) to (10.5,10.5)
     plot!([10.5, 10.5], [10.5, 0.5], color=:black, linewidth=2)  # (10.5,10.5) to (10.5,0.5)
 
     display(p)
+    println(state)
 end
 
 end

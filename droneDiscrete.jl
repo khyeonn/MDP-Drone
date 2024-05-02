@@ -175,6 +175,11 @@ function render(env::DroneEnv, state::DroneState)
     end
     plot!([env.target[1]], [env.target[2]], mark=:star, markersize=20, color=:yellow)
     plot!([state.x], [state.y], mark=:circle, markersize=20, color=:blue)
+    
+    plot!([0.5, 0.5], [0.5, 10.5], color=:black, linewidth=2)  # (0.5,0.5) to (0.5,10.5)
+    plot!([0.5, 10.5], [0.5, 0.5], color=:black, linewidth=2)  # (0.5,0.5) to (10.5,0.5)
+    plot!([0.5, 10.5], [10.5, 10.5], color=:black, linewidth=2)  # (0.5,10.5) to (10.5,10.5)
+    plot!([10.5, 10.5], [10.5, 0.5], color=:black, linewidth=2)  # (10.5,10.5) to (10.5,0.5)
 
     display(p)
 end

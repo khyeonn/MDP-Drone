@@ -25,7 +25,7 @@ struct DroneAction
     rotate::Float64 # radians
 end
 
-struct DroneEnv
+mutable struct DroneEnv
     size::Tuple{Int, Int} 
     target::Tuple{Float64, Float64, Float64} # (x, y, radius)
     max_velocity::Float64
@@ -51,6 +51,9 @@ function DroneEnv(;
     return DroneEnv(size, target, max_velocity, max_rotation_rate, discount, isterminal)
 end
 
+function set_target!(env::DroneEnv, target::Tuple{Float64, Float64, Float64})
+    env.target = target
+end
 
 # transition function
 function POMDPs.transition(env::DroneEnv, state::DroneState, action::DroneAction)

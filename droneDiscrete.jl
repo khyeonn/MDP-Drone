@@ -9,34 +9,28 @@ export DroneEnv, DroneState, DroneAction
 const DEFAULT_SIZE = (50.0, 50.0)
 const STEP_SIZE = 0.001
 const DEFAULT_DISCOUNT = 0.95
+const DEFAULT_PROB = 0.7
 
 struct DroneState
     x::Int64
     y::Int64
     theta::Float64 # heading angle
+    done::Bool # are we in a terminal state?
 end
 
-struct DroneAction #From the drone frame
-    :FWD::Symbol
-    :BKWD::Symbol
-    :L::Symbol
-    :R::Symbol
-    :CCW::Symbol
-    :CW::Symbol
-end
-
-struct DroneEnv
+mutable struct DroneEnv
     size::Tuple{Int, Int} 
     target::Tuple{Int64, Int64} # (x, y)
     discount::Float64
-    isterminal::Bool
+    tprob::Float64 # probability of transitioning to the desired state
     # obstacles::Vector{Tuple{Float64, Float64, Float64}} # for later
 end
 
 # environment constructor
 function DroneEnv(;
         size = DEFAULT_SIZE,
-        discount = DEFAULT_DISCOUNT
+        discount = DEFAULT_DISCOUNT,
+        tprob = DEFAULT_PROB
         )
 
     target_x, target_y = rand(1:STEP_SIZE:size[1]), rand(1:STEP_SIZE:size[2])
@@ -46,27 +40,84 @@ function DroneEnv(;
     return DroneEnv(size, target, discount, isterminal)
 end
 
+# action space
+POMDPs.actions(env::DroneEnv) = [:FWD, :BKWD, :L, :R, :CCW, :CW]
+
+# Check if its on the goal state
+checkgoal(env::DroneEnv, s::DroneState) = s.x == env.target[1] && s.y == env.target[2]
+
 
 # transition function
-function POMDPs.transition(env::DroneEnv, state::DroneState, action::DroneAction)
-    # update heading angle
-    theta_new = state.theta + clamp(action.rotate, -env.max_rotation_rate, env.max_rotation_rate)
-    theta_new = atan(sin(theta_new), cos(theta_new)) # limit to -π to π 
+function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
+    a = action
+    x = state.x
+    y = state.y
+    θ = state.theta
 
-    # velocity update
-    v_new = clamp(state.v + action.accel, -env.max_velocity, env.max_velocity)
-
-    # update position
-    x_new = state.x + v_new*cos(theta_new)
-    y_new = state.y + v_new*sin(theta_new)
-
-    new_state = DroneState(x_new, y_new, v_new, theta_new)
-
-    if isterminal(env, new_state)
-        env.isterminal = true
+    if state.done
+        return SparseCat([DroneState(x, y, theta, true)], [1.0])
     end
 
-    return new_state
+    ingoal = checkgoal(env, state)
+
+    neighbors = [
+        DroneState(x+1, y, θ, ingoal) 
+        DroneState(x-1, y, θ, ingoal)
+        DroneState(x, y+1, θ, ingoal)
+        DroneState(x, y-1, θ, ingoal)
+        DroneState(x, y, mod(θ+pi/2,2*pi/2), ingoal) # set limit
+        DroneState(x, y, mod(maximum([θ-pi/2,θ+3*pi/2]),2*pi), ingoal) # set limit
+        ]
+
+    probability = fill((1-env.tprob)/5, 6)
+    if a == :CW
+        probability[6] = env.tprob
+    elseif a == :CCW
+        probability[5] = env.tprob
+    end
+
+    if a == :FWD
+        if state.theta == 0.0
+            probability[1] = env.tprob
+        elseif state.theta == pi/2
+            probability[3] = env.tprob
+        elseif state.theta == pi
+            probability[2] = env.tprob
+        elseif state.theta == 3*pi/2
+            probability[4] = env.tprob
+        end
+    elseif a == :BKWD
+        if state.theta == 0.0
+            probability[2] = env.tprob
+        elseif state.theta == pi/2
+            probability[4] = env.tprob
+        elseif state.theta == pi
+            probability[1] = env.tprob
+        elseif state.theta == 3*pi/2
+            probability[3] = env.tprob
+        end
+    elseif a == :L
+        if state.theta == 0.0
+            probability[3] = env.tprob
+        elseif state.theta == pi/2
+            probability[2] = env.tprob
+        elseif state.theta == pi
+            probability[4] = env.tprob
+        elseif state.theta == 3*pi/2
+            probability[1] = env.tprob
+        end
+    elseif a == :R
+        if state.theta == 0.0
+            probability[4] = env.tprob
+        elseif state.theta == pi/2
+            probability[1] = env.tprob
+        elseif state.theta == pi
+            probability[3] = env.tprob
+        elseif state.theta == 3*pi/2
+            probability[2] = env.tprob
+        end
+
+    return SparseCat(neighbors, probability)
 end
 
 # terminal condition

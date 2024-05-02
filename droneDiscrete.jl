@@ -1,9 +1,10 @@
-module Drone
+module DroneDiscrete
 
 using POMDPs
 using Plots
+using POMDPTools
 
-export DroneEnv, DroneState, DroneAction
+export DroneState,DroneEnv, DroneEnv, checkgoal, checkobs, checkoutbounds, plot_target, render, gen
 
 # default values for DroneEnv
 const DEFAULT_SIZE = (10, 10)
@@ -17,9 +18,11 @@ struct DroneState
     done::Bool # are we in a terminal state?
 end
 
+DroneState(x::Int64, y::Int64, θ::Float64) = DroneState(x,y,θ,false)
+
 mutable struct DroneEnv
     size::Tuple{Int64, Int64} 
-    obstacles::Vector{Tuple{Int64, Int64}} # for later
+    obstacles::Vector{Tuple{Int64, Int64}}
     target::Tuple{Int64, Int64} # (x, y)
     discount::Float64
     tprob::Float64 # probability of transitioning to the desired state
@@ -28,14 +31,13 @@ end
 
 # environment constructor
 function DroneEnv(;
+        target = (10,10),
         size = DEFAULT_SIZE,
         discount = DEFAULT_DISCOUNT,
         tprob = DEFAULT_PROB
         )
 
-    target_x, target_y = 10, 10
-    target = (target_x, target_y)
-    obstacles
+    obstacles = [(5, 10), (5, 9), (10, 9),(2,8),(3,8),(10,8),(2,7),(3,7),(10,7),(2,6),(3,6),(6,6),(7,6),(8,6),(9,6),(10,6),(10,5),(10,4),(2,3),(3,3),(2,2),(3,2),(4,2),(5,2),(6,2),(7,2)]
     return DroneEnv(size,obstacles, target, discount, tprob,)
 end
 
@@ -132,6 +134,7 @@ function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
         elseif state.theta == 3*pi/2
             probability[2] = env.tprob
         end
+    end
 
     return SparseCat(neighbors, probability)
 end
@@ -154,31 +157,26 @@ POMDPs.discount(env::DroneEnv) = env.discount
 
 
 # generate next state sp, and reward r 
-function gen(env::DroneEnv, state::DroneState, action::DroneAction)
+function gen(env::DroneEnv, state::DroneState, action::Symbol)
     sp = POMDPs.transition(env, state, action)
     r = POMDPs.reward(env, state, action)
 
     return sp, r
 end
 
-function plot_target(p::Plots.Plot, x, y, r; color::Symbol, label::String)
-    n = 100
-    rads = range(0, stop=2*π, length=n)
-    x = x .+ r.*cos.(rads)
-    y = y .+ r.*sin.(rads)
-    plot!(p, x, y, label=label, color=color, legend=true)
-end
 
 # render
 function render(env::DroneEnv, state::DroneState)
-    p = plot(size=(800, 800), xlim=(0, env.size[1]), ylim=(0, env.size[2]), legend=false)
-
-    plot_target(p, env.target[1], env.target[2], env.target[3], label="Target Region", color=:red)
-
-    plot!([state.x], [state.y], mark=:circle, markersize=5, color=:blue, label="Drone")
+    p = plot(size=(800, 800), xlim=(0, env.size[1]+1), ylim=(0, env.size[2]+1), legend=false)
+    xticks!(0:0.5:env.size[1]+1)
+    yticks!(0:0.5:env.size[2]+1)
+    for obs in env.obstacles
+        plot!([obs[1]], [obs[2]], mark=:circle, markersize=20, color=:black)
+    end
+    plot!([env.target[1]], [env.target[2]], mark=:star, markersize=20, color=:yellow)
+    plot!([state.x], [state.y], mark=:circle, markersize=20, color=:blue)
 
     display(p)
 end
 
-
-end # module
+end

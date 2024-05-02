@@ -1,22 +1,22 @@
 if !@isdefined Drone
-    include("Drone.jl")
+    include("DroneDiscrete.jl")
 end
 using POMDPs
-using .Drone: DroneEnv, DroneState, DroneAction, isterminal, discount, gen, render
+using .DroneDiscrete: gen, DroneEnv, DroneState, render
 
 env = DroneEnv()
 
-target = (10.0, 10.0, 5.0) # target region (x, y, radius)
-initial_state = DroneState(0.0, 0.0, 0.0, 0.0) # state is (x, y, v, theta)
+initial_state = DroneState(1, 1, 0.0) # state is (x, y, v, theta)
 
-action = DroneAction(0.5, 0.5) # actions are (accelerate, turn). turn action is in radians
+action = :FWD
 
 # can transition forward to next state and get reward like this:
 new_state = POMDPs.transition(env, initial_state, action)
-reward = POMDPs.reward(env, new_state) 
+
+reward = POMDPs.reward(env, rand(new_state), action) 
 
 # can also do this in one line:
 sp, r = gen(env, initial_state, action) 
 
 # render environment like this:
-render(env, sp)
+render(env, rand(sp))

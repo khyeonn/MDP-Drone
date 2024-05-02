@@ -6,8 +6,7 @@ using Plots
 export DroneEnv, DroneState, DroneAction
 
 # default values for DroneEnv
-const DEFAULT_SIZE = (50.0, 50.0)
-const STEP_SIZE = 0.001
+const DEFAULT_SIZE = (10, 10)
 const DEFAULT_DISCOUNT = 0.95
 const DEFAULT_PROB = 0.7
 
@@ -19,11 +18,12 @@ struct DroneState
 end
 
 mutable struct DroneEnv
-    size::Tuple{Int, Int} 
+    size::Tuple{Int64, Int64} 
+    obstacles::Vector{Tuple{Int64, Int64}} # for later
     target::Tuple{Int64, Int64} # (x, y)
     discount::Float64
     tprob::Float64 # probability of transitioning to the desired state
-    # obstacles::Vector{Tuple{Float64, Float64, Float64}} # for later
+    
 end
 
 # environment constructor
@@ -33,19 +33,35 @@ function DroneEnv(;
         tprob = DEFAULT_PROB
         )
 
-    target_x, target_y = rand(1:STEP_SIZE:size[1]), rand(1:STEP_SIZE:size[2])
+    target_x, target_y = 10, 10
     target = (target_x, target_y)
-    isterminal = false
-
-    return DroneEnv(size, target, discount, isterminal)
+    obstacles
+    return DroneEnv(size,obstacles, target, discount, tprob,)
 end
 
 # action space
 POMDPs.actions(env::DroneEnv) = [:FWD, :BKWD, :L, :R, :CCW, :CW]
 
-# Check if its on the goal state
+# Check if current state is the goal state
 checkgoal(env::DroneEnv, s::DroneState) = s.x == env.target[1] && s.y == env.target[2]
-
+# Check if current state is obstacle
+function checkobs(env::DroneEnv, s::DroneState)
+    obstacles = env.obstacles
+    for obstacle in obstacles
+        if s.x == obstacle[1] && s.y == obstacle[2]
+            return true
+        end
+    end
+    return false
+end
+# Check if current state is out of bounds
+function checkoutbounds(env::DroneEnv, s::DroneState)
+    x_max, y_max = env.size
+    if s.x > x_max || s.x < 1 || s.y > y_max || s.y < 1
+        return true
+    end
+    return false
+end
 
 # transition function
 function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
@@ -65,7 +81,7 @@ function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
         DroneState(x-1, y, θ, ingoal)
         DroneState(x, y+1, θ, ingoal)
         DroneState(x, y-1, θ, ingoal)
-        DroneState(x, y, mod(θ+pi/2,2*pi/2), ingoal) # set limit
+        DroneState(x, y, mod(θ+pi/2,2*pi), ingoal) # set limit
         DroneState(x, y, mod(maximum([θ-pi/2,θ+3*pi/2]),2*pi), ingoal) # set limit
         ]
 
@@ -120,17 +136,14 @@ function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
     return SparseCat(neighbors, probability)
 end
 
-# terminal condition
-function isterminal(env::DroneEnv, state::DroneState)
-    distance_to_target = sqrt((state.x - env.target[1])^2 + (state.y - env.target[2])^2)
-
-    return distance_to_target <= env.target[3]
-end
-
 # reward function
-function POMDPs.reward(env::DroneEnv, state::DroneState)
-    if isterminal(env, state)
+function POMDPs.reward(env::DroneEnv, state::DroneState, action::Symbol)
+    if checkgoal(env, state)
         return 100.0
+    elseif checkobs(env, state)
+        return -100.0
+    elseif checkoutbounds(env,state)
+        return -100.0
     else
         return -0.1
     end
@@ -143,7 +156,7 @@ POMDPs.discount(env::DroneEnv) = env.discount
 # generate next state sp, and reward r 
 function gen(env::DroneEnv, state::DroneState, action::DroneAction)
     sp = POMDPs.transition(env, state, action)
-    r = POMDPs.reward(env, state)
+    r = POMDPs.reward(env, state, action)
 
     return sp, r
 end

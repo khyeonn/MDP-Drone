@@ -4,8 +4,9 @@ if !@isdefined Drone
 end
 using POMDPs
 using Plots
-using .Drone: DroneEnv, render
+using .Drone: DroneEnv, plot_frame
 using .ppo: PPO, Actor, Critic, learn
+using BSON: @load
 
 function train(env, actor, critic; hyperparameters)
     model = PPO(env, actor, critic)
@@ -19,15 +20,16 @@ function train(env, actor, critic; hyperparameters)
     return actor_loss, critic_loss
 end
 
+
 function plot_loss(data, label::String)
     p = plot(1:length(data), data, label=label)
     display(p)
 end
 
 hyperparameters = Dict(
-        "max_timesteps_per_batch" => 2000,
-        "max_timesteps_per_episode" => 500,
-        "total_timesteps" => 200_000,
+        "max_timesteps_per_batch" => 5000,
+        "max_timesteps_per_episode" => 1000,
+        "total_timesteps" => 500_000,
         "lr" => 1e-5,
         "clip" => 0.2
     )

@@ -1,8 +1,9 @@
 module ppo
 
 include("Drone.jl")
-using ..Drone: DroneEnv, DroneAction, DroneState, get_state, isterminal, discount, gen, reset!
+using ..Drone: DroneEnv, DroneAction, DroneState, get_state, isterminal, discount, gen, reset!, create_animation
 
+using Plots
 using Flux: Chain, Dense, params, gradient, Optimise, Adam, mse, update!
 using Distributions: Normal, logpdf
 using Statistics: mean, std
@@ -199,6 +200,31 @@ function evaluate(ppo::PPO, batch_obs, batch_acts)
 end
 
 
+### run model
+function _run(ppo::PPO)
+    max_timesteps_per_episode = ppo.hyperparameters["max_timesteps_per_episode"]
+    batch_env = Vector{DroneEnv}()
+    ep_rewards = Vector{Float32}()
+
+    reset!(ppo.env)
+    push!(batch_env, deepcopy(ppo.env))
+
+    for _ in 1:max_timesteps_per_episode
+        action, _ = get_action(ppo)
+        _, r, done = gen(ppo.env, action)
+
+        push!(batch_env, deepcopy(ppo.env))
+        push!(ep_rewards, r)
+
+        if done
+            break
+        end
+    end
+
+    return batch_env, ep_rewards
+end
+
+
 ### learning update
 function learn(ppo::PPO)
     total_timesteps = ppo.hyperparameters["total_timesteps"]
@@ -249,11 +275,19 @@ function learn(ppo::PPO)
             push!(critic_losses, critic_loss)
         end
 
-        println("----------- Iteration #$i_so_far -----------")
+        if i_so_far % 10 == 0
+            batch_env, _ = _run(ppo)
+            animation = create_animation(batch_env)
+            gif(animation, "animations/ppo_$i_so_far.gif")
+            @save "models/ppo_$i_so_far.bson" ppo
+        end
+
+        println("-----------  Iteration #$i_so_far  -----------")
         println("Timesteps so far: $t_so_far")
         println("-----------     END SUMMARY      -----------\n")
-    end
 
+        @save "models/ppo_final.bson" ppo
+    end
     return actor_losses, critic_losses
 end
 

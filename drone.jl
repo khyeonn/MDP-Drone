@@ -11,23 +11,23 @@ export DroneEnv, DroneState, DroneAction, Target, Obstacle
 const DEFAULT_SIZE = (50.0, 50.0)
 const DEFAULT_TARGET_RADIUS = 5.0
 const STEP_SIZE = 0.001
-const DEFAULT_DISCOUNT = 0.95
+const DEFAULT_DISCOUNT = 0.99
 const DEFAULT_MAX_VELOCITY = 1.0 # [unit] per time step
 const DEFAULT_MAX_ACCELERATION = 1.0
 const DEFAULT_MAX_ROTATION_RATE = 0.05 # radians
 const DEFAULT_OBSTACLES = 10
-const DEFAULT_STATE = (0.0, 0.0, 0.0, 0.0)
+const DEFAULT_STATE = (2.0, 2.0, 0.0, 0.0)
 
 struct DroneState
-    x::Float64 
-    y::Float64
-    v::Float64
-    theta::Float64 # heading angle
+    x::Float32 
+    y::Float32
+    v::Float32
+    theta::Float32 # heading angle
 end
 
 struct DroneAction
-    accel::Float64
-    rotate::Float64 # radians
+    accel::Float32
+    rotate::Float32 # radians
 end
 
 struct Target
@@ -46,13 +46,14 @@ mutable struct DroneEnv
     size::Tuple{Float64, Float64} 
     drone::DroneState
     target::Target 
-    max_velocity::Float64
-    max_acceleration::Float64
-    max_rotation_rate::Float64
-    discount::Float64
+    max_velocity::Float32
+    max_acceleration::Float32
+    max_rotation_rate::Float32
+    discount::Float32
     isterminal::Bool
     num_obstacles::Int64
-    obstacles::Vector{Obstacle} 
+    obstacles::Vector{Obstacle}
+    initial_state::DroneState
 end
 
 # environment constructor
@@ -66,6 +67,7 @@ function DroneEnv(;
         discount = DEFAULT_DISCOUNT,
         num_obstacles = DEFAULT_OBSTACLES
         )
+    initial_state = drone
     ## for testing purposes
     Random.seed!(1)
 
@@ -78,14 +80,14 @@ function DroneEnv(;
 
     isterminal = false
 
-    return DroneEnv(size, drone, target, max_velocity, max_acceleration, max_rotation_rate, discount, isterminal, num_obstacles, obstacles)
+    return DroneEnv(size, drone, target, max_velocity, max_acceleration, max_rotation_rate, discount, isterminal, num_obstacles, obstacles, initial_state)
 end
 
 
 ## generate random obstacles
 function generate_obstacles(size::Tuple{Float64, Float64}, num_obstacles::Int64, target::Target)
     obstacles = Vector{Obstacle}()
-    min_radius = 2.5
+    min_radius= 2.5
     max_radius = 7.5
 
     for _ in 1:num_obstacles
@@ -105,11 +107,8 @@ function generate_obstacles(size::Tuple{Float64, Float64}, num_obstacles::Int64,
     return obstacles
 end
 
-function set_target!(env::DroneEnv, target::Target)
-    env.target = target
-end
 
-# transition function
+### transition function
 function POMDPs.transition(env::DroneEnv, action::DroneAction)
     # update heading angle
     theta_new = env.drone.theta + clamp(action.rotate, -env.max_rotation_rate, env.max_rotation_rate)
@@ -126,6 +125,14 @@ function POMDPs.transition(env::DroneEnv, action::DroneAction)
     x_new += randn()*0.1 # add some randomness
     y_new += randn()*0.1
 
+    # check for out of bounds
+    if x_new >= env.size[1]
+        x_new = env.size[1]
+    end
+    if y_new >= env.size[2]
+        y_new = env.size[2]
+    end
+
     # update drone state in env
     new_state = DroneState(x_new, y_new, v_new, theta_new)
     env.drone = new_state
@@ -134,7 +141,7 @@ function POMDPs.transition(env::DroneEnv, action::DroneAction)
         env.isterminal = true
     end
 
-    return new_state
+    return new_state, env.isterminal
 end
 
 ### terminal condition handling
@@ -172,11 +179,28 @@ POMDPs.discount(env::DroneEnv) = env.discount
 
 ### generate next state sp, and reward r 
 function gen(env::DroneEnv, action::DroneAction)
-    sp = POMDPs.transition(env, action)
+    sp, done = POMDPs.transition(env, action)
     r = POMDPs.reward(env)
 
-    return sp, r
+    return sp, r, done
 end
+
+### reset env
+function reset!(env::DroneEnv)
+    env.size = env.size
+    env.drone = env.initial_state
+    env.target = env.target
+    env.max_velocity = env.max_velocity
+    env.max_acceleration = env.max_acceleration
+    env.max_rotation_rate = env.max_rotation_rate
+    env.discount = env.discount
+    env.isterminal = false
+    env.num_obstacles = env.num_obstacles
+    env.obstacles = env.obstacles
+
+    return 0
+end
+
 
 ### plot target
 function plot_target(p::Plots.Plot, env::DroneEnv; color::Symbol, label::String)
@@ -186,6 +210,7 @@ function plot_target(p::Plots.Plot, env::DroneEnv; color::Symbol, label::String)
     y = env.target.y .+ env.target.r.*sin.(rads)
     plot!(p, x, y, label=label, color=color, legend=true)
 end
+
 
 ### plot obstacles
 function plot_obstacles(p::Plots.Plot, env::DroneEnv; color::Symbol, label::String)
@@ -201,14 +226,24 @@ function plot_obstacles(p::Plots.Plot, env::DroneEnv; color::Symbol, label::Stri
     plot!(p, x, y, label=label, color=color, legend=true)
 end
 
+
+### generate target manually
+function set_target!(env::DroneEnv, target::Target)
+    env.target = target
+end
+
+function get_state(drone::DroneState)
+    return [drone.x, drone.y, drone.v, drone.theta]
+end
+
 ### render
-function render(env::DroneEnv, state::DroneState)
+function render(env::DroneEnv)
     p = plot(size=(800, 800), xlim=(0, env.size[1]), ylim=(0, env.size[2]), legend=false)
 
     plot_target(p, env, label="Target Region", color=:red)
     plot_obstacles(p, env, label="Obstacles", color=:black)
 
-    plot!([state.x], [state.y], mark=:circle, markersize=3, color=:blue, label="Drone")
+    plot!([env.drone.x], [env.drone.y], mark=:circle, markersize=3, color=:blue, label="Drone", legend=:topright)
 
     display(p)
 end

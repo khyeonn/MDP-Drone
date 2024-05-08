@@ -2,13 +2,13 @@ if !@isdefined Drone
     include("Drone.jl")
 end
 using POMDPs
-using .Drone: DroneEnv, DroneState, DroneAction, Target, Obstacle, isterminal, discount, gen, render, set_target!
+using .Drone: DroneEnv, DroneState, DroneAction, Target, Obstacle, isterminal, discount, gen, render, set_target!, reset!
 
 # env generates random target region
 env = DroneEnv()
 
 # render using the drone state
-render(env, env.drone)
+render(env)
 
 ### can override auto generated target like this:
 # target = Target(10.0, 10.0, 5.0) # target region (x, y, radius)
@@ -17,11 +17,14 @@ render(env, env.drone)
 action = DroneAction(0.5, 0.5) # actions are (accelerate, turn). turn action is in radians
 
 # can transition forward to next state and get reward like this:
-new_state = POMDPs.transition(env, action)
+new_state, done = POMDPs.transition(env, action)
 reward = POMDPs.reward(env) 
 
 # can also do this in one line:
-sp, r = gen(env, action) 
+sp, r, done = gen(env, action) 
 
 # render environment:
-render(env, sp)
+render(env)
+
+# reset env like this:
+reset!(env)

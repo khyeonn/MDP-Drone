@@ -117,20 +117,26 @@ function POMDPs.transition(env::DroneEnv, action::DroneAction)
     # velocity update
     accel = clamp(action.accel, -env.max_acceleration, env.max_acceleration)
     v_new = clamp(env.drone.v + accel, -env.max_velocity, env.max_velocity)
-    v_new += randn()*0.05 # add some randomness
+    v_new += randn()*0.005 # add some randomness
 
     # update position
     x_new = env.drone.x + v_new*cos(theta_new)
     y_new = env.drone.y + v_new*sin(theta_new)
-    x_new += randn()*0.1 # add some randomness
-    y_new += randn()*0.1
+    x_new += randn()*0.05 # add some randomness
+    y_new += randn()*0.05
 
     # check for out of bounds
     if x_new >= env.size[1]
         x_new = env.size[1]
     end
+    if x_new <= 0
+        x_new = 0
+    end
     if y_new >= env.size[2]
         y_new = env.size[2]
+    end
+    if y_new <= 0
+        y_new = 0
     end
 
     # update drone state in env
@@ -236,16 +242,38 @@ function get_state(drone::DroneState)
     return [drone.x, drone.y, drone.v, drone.theta]
 end
 
-### render
-function render(env::DroneEnv)
+# for plotting
+function _rotate(x, y, angle)
+    x_rotated = cos(angle)*x - sin(angle)*y
+    y_rotated = sin(angle)*x + cos(angle)*y    
+
+    return x_rotated, y_rotated
+end
+
+### plot 1 frame of environment
+function plot_frame(env::DroneEnv; show=true)
     p = plot(size=(800, 800), xlim=(0, env.size[1]), ylim=(0, env.size[2]), legend=false)
 
     plot_target(p, env, label="Target Region", color=:red)
     plot_obstacles(p, env, label="Obstacles", color=:black)
 
-    plot!([env.drone.x], [env.drone.y], mark=:circle, markersize=3, color=:blue, label="Drone", legend=:topright)
+    x = [0.6, 0, 0, 0.6]
+    y = [0.0, 0.2, -0.2, 0.0]
+    rotated_x, rotated_y = _rotate(x, y, env.drone.theta)
 
-    display(p)
+    plot!([env.drone.x], [env.drone.y], mark=Shape(rotated_x, rotated_y), markersize=75, color=:blue, label="Drone", legend=:topright)
+
+    if show
+        display(p)
+    end
+end
+
+function create_animation(batch_env::Vector{DroneEnv})
+    anim = @animate for i in eachindex(batch_env)
+        plot_frame(batch_env[i], show=false)
+    end
+
+    return anim
 end
 
 

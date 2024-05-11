@@ -4,7 +4,7 @@ using POMDPs
 using Plots
 using POMDPTools
 
-export DroneState,DroneEnv, DroneEnv, checkgoal, checkobs, checkoutbounds, plot_target, render, gen
+export DroneState,DroneEnv, DroneEnv, checkgoal, checkobs, checkoutbounds, plot_target, render
 
 # default values for DroneEnv
 const DEFAULT_SIZE = (10, 10)
@@ -20,13 +20,12 @@ end
 
 DroneState(x::Int64, y::Int64, θ::Float64) = DroneState(x,y,θ,false)
 
-mutable struct DroneEnv
+mutable struct DroneEnv <: MDP{DroneState, Symbol}
     size::Tuple{Int64, Int64} 
     obstacles::Vector{Tuple{Int64, Int64}}
     target::Tuple{Int64, Int64} # (x, y)
     discount::Float64
     tprob::Float64 # probability of transitioning to the desired state
-    
 end
 
 # environment constructor
@@ -36,9 +35,19 @@ function DroneEnv(;
         discount = DEFAULT_DISCOUNT,
         tprob = DEFAULT_PROB
         )
-
     obstacles = [(5, 10), (5, 9), (10, 9),(2,8),(3,8),(10,8),(2,7),(3,7),(10,7),(2,6),(3,6),(6,6),(7,6),(8,6),(9,6),(10,6),(10,5),(10,4),(2,3),(3,3),(2,2),(3,2),(4,2),(5,2),(6,2),(7,2)]
     return DroneEnv(size,obstacles, target, discount, tprob,)
+end
+
+# action space
+function POMDPs.states(env::DroneEnv)
+    s = DroneState[] # initialize an array of GridWorldStates
+    # loop over all our states, remeber there are two binary variables:
+    # done (d)
+    for d = 0:1,theta = 0.0:pi/2:3*pi/2,  y = 1:env.size[2], x = 1:env.size[1]
+        push!(s, DroneState(x,y,theta,d))
+    end
+    return s
 end
 
 # action space
@@ -82,6 +91,7 @@ end
 
 # transition function
 function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
+    @show state
     a = action
     x = state.x
     y = state.y
@@ -152,7 +162,6 @@ function POMDPs.transition(env::DroneEnv, state::DroneState, action::Symbol)
             probability[2] = env.tprob
         end
     end
-    @show probability
     return SparseCat(neighbors, probability)
 end
 
@@ -172,15 +181,45 @@ end
 # discount
 POMDPs.discount(env::DroneEnv) = env.discount
 
+# is terminal
+POMDPs.isterminal(env::DroneEnv, s::DroneState) = s.done
 
-# generate next state sp, and reward r 
-function gen(env::DroneEnv, state::DroneState, action::Symbol)
-    sp = POMDPs.transition(env, state, action)
-    r = POMDPs.reward(env, state, action)
 
-    return sp, r
+function POMDPs.stateindex(env::DroneEnv, state::DroneState)
+    num_x = env.size[1]
+    num_y = env.size[2]
+    num_theta = 4 # There are 4 discrete values for theta
+
+    # Define a mapping for theta values to integers
+    theta_mapping = Dict(0.0 => 1, Float64(pi)/2 => 2, Float64(pi) => 3, 3*Float64(pi)/2 => 4)
+
+    # Calculate the index based on state variables
+    theta_index = theta_mapping[state.theta]
+    index = state.x + (state.y - 1) * num_x + (theta_index - 1) * num_x * num_y
+
+    # If the state is terminal, add the size of the non-terminal states
+    if state.done
+        index += num_x * num_y * num_theta
+    end
+    return index
 end
 
+function POMDPs.actionindex(env::DroneEnv, act::Symbol)
+    if act==:FWD
+        return 1
+    elseif act==:BKWD
+        return 2
+    elseif act==:L
+        return 3
+    elseif act==:R
+        return 4
+    elseif act==:CCW
+        return 5
+    elseif act==:CW
+        return 6
+    end
+    error("Invalid GridWorld action: $act")
+end
 
 # render
 function render(env::DroneEnv, state::DroneState)
@@ -191,8 +230,9 @@ function render(env::DroneEnv, state::DroneState)
         plot!([obs[1]], [obs[2]], mark=:circle, markersize=20, color=:black)
     end
     plot!([env.target[1]], [env.target[2]], mark=:star, markersize=20, color=:yellow)
-    plot!([state.x], [state.y], mark=:circle, markersize=20, color=:blue)
-
+    plot!([state.x], [state.y], mark=:diamond, markersize=20, color=:blue)
+    quiver!([state.x], [state.y], quiver=[(0.5*cos(state.theta), 0.5*sin(state.theta))], color=:black, arrow=true, linewidth=5)
+    
     plot!([0.5, 0.5], [0.5, 10.5], color=:black, linewidth=2)  # (0.5,0.5) to (0.5,10.5)
     plot!([0.5, 10.5], [0.5, 0.5], color=:black, linewidth=2)  # (0.5,0.5) to (10.5,0.5)
     plot!([0.5, 10.5], [10.5, 10.5], color=:black, linewidth=2)  # (0.5,10.5) to (10.5,10.5)

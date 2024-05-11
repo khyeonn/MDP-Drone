@@ -2,43 +2,50 @@ if !@isdefined Drone
     include("Drone.jl")
     include("ppo.jl")
 end
-using POMDPs
+using .Drone: DroneEnv, plot_frame, reset!, gen, create_animation
+using .ppo: PPO, Actor, Critic, get_action
+using Statistics: mean
 using Plots
-using .Drone: DroneEnv, plot_frame
-using .ppo: PPO, Actor, Critic, learn
 using BSON: @load
 
-function train(env, actor, critic; hyperparameters)
-    model = PPO(env, actor, critic)
+@load "models/ppo_final.bson" ppo_network
 
-    if !isempty(hyperparameters)
-        ppo._init_hyperparameters(model, hyperparameters)
+
+function rollout(ppo::PPO; max_episodes = 100)
+    rewards = Vector{Float32}()
+    total_len = Vector{Int64}()
+    episode_env = Vector{DroneEnv}()
+    batch_env = Vector{Vector{DroneEnv}}()
+
+    for _ in 1:max_episodes
+        reset!(ppo.env)
+        empty!(episode_env)
+
+        ep_rewards = 0.0
+        ep_len = 0
+
+        for t in 1:ppo.hyperparameters["max_timesteps_per_episode"]
+            action, _ = get_action(ppo)
+            _, r, done = gen(ppo.env, action)
+
+            push!(episode_env, deepcopy(ppo.env))
+
+            ep_rewards += r
+            ep_len = t
+
+            if done
+                break
+            end
+        end
+        push!(batch_env, episode_env)
+        push!(rewards, ep_rewards)
+        push!(total_len, ep_len)
     end
-
-    actor_loss, critic_loss = learn(model)
-
-    return actor_loss, critic_loss
+    return rewards, total_len, batch_env
 end
 
+rewards, ep_lengths, batch_env = rollout(ppo_network)
 
-function plot_loss(data, label::String)
-    p = plot(1:length(data), data, label=label)
-    display(p)
-end
-
-hyperparameters = Dict(
-        "max_timesteps_per_batch" => 5000,
-        "max_timesteps_per_episode" => 1000,
-        "total_timesteps" => 500_000,
-        "lr" => 1e-5,
-        "clip" => 0.2
-    )
-
-env = DroneEnv()
-
-actor = Actor(4, 2)
-critic = Critic(4, 1)
-actor_loss, critic_loss = train(env, actor, critic, hyperparameters=hyperparameters)
-
-plot_loss(actor_loss, "Actor loss")
-plot_loss(critic_loss, "Critic loss")
+i = argmax(rewards)
+animation = create_animation(batch_env[i])
+gif(animation, "gif_test.gif")

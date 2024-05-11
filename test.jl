@@ -37,10 +37,12 @@ env = DroneEnv()
 # store environment for animating:
 batch_env = Vector{DroneEnv}()
 
-max_t = 50
+max_t = 300
 for _ in 1:max_t
-    # choose random actions
-    action = DroneAction(randn(), randn())
+
+    # choose action from policy. available: random, heuristic_policy()
+    # action = Drone.random_policy()
+    action = Drone.heuristic_policy(env)
 
     # forward step env
     sp_, r_, done_ = gen(env, action)
@@ -55,4 +57,4 @@ end
 
 # create animation
 animation = create_animation(batch_env)
-gif(animation, "gif_ex.gif")
+gif(animation, "gif_test.gif")

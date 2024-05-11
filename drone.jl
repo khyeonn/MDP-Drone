@@ -12,9 +12,9 @@ const DEFAULT_SIZE = (50.0, 50.0)
 const DEFAULT_TARGET_RADIUS = 5.0
 const STEP_SIZE = 0.001
 const DEFAULT_DISCOUNT = 0.99
-const DEFAULT_MAX_VELOCITY = 1.0 # [unit] per time step
+const DEFAULT_MAX_VELOCITY = 1.0 
 const DEFAULT_MAX_ACCELERATION = 1.0
-const DEFAULT_MAX_ROTATION_RATE = 0.05 # radians
+const DEFAULT_MAX_ROTATION_RATE = 0.05 
 const DEFAULT_OBSTACLES = 10
 const DEFAULT_STATE = (2.0, 2.0, 0.0, 0.0)
 
@@ -110,12 +110,16 @@ end
 
 ### transition function
 function POMDPs.transition(env::DroneEnv, action::DroneAction)
+    # scale actions
+    accel = action.accel/10
+    rotate = action.rotate/20
+
     # update heading angle
-    theta_new = env.drone.theta + clamp(action.rotate, -env.max_rotation_rate, env.max_rotation_rate)
+    theta_new = env.drone.theta + clamp(rotate, -env.max_rotation_rate, env.max_rotation_rate)
     theta_new = atan(sin(theta_new), cos(theta_new)) # limit to -π to π 
 
     # velocity update
-    accel = clamp(action.accel, -env.max_acceleration, env.max_acceleration)
+    accel = clamp(accel, -env.max_acceleration, env.max_acceleration)
     v_new = clamp(env.drone.v + accel, -env.max_velocity, env.max_velocity)
     v_new += randn()*0.005 # add some randomness
 
@@ -150,15 +154,19 @@ function POMDPs.transition(env::DroneEnv, action::DroneAction)
     return new_state, env.isterminal
 end
 
+function get_distance(v1, v2)
+    return norm(v1 - v2)
+end
+
 ### terminal condition handling
 function isterminal(env::DroneEnv)
-    distance_to_target = norm([env.drone.x, env.drone.y] - [env.target.x, env.target.y])
+    distance_to_target = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])
     if distance_to_target <= env.target.r
         return 1
     end
 
     for i in 1:env.num_obstacles
-        distance_to_obstacle = norm([env.drone.x, env.drone.y] - [env.obstacles[i].x, env.obstacles[i].y])
+        distance_to_obstacle = get_distance([env.drone.x, env.drone.y], [env.obstacles[i].x, env.obstacles[i].y])
 
         if distance_to_obstacle <= env.obstacles[i].r
             return 2
@@ -175,7 +183,8 @@ function POMDPs.reward(env::DroneEnv)
     elseif isterminal(env) == 2
         return -100.0
     else
-        return -0.1
+        r = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])
+        return -r
     end
 end
 
@@ -205,6 +214,29 @@ function reset!(env::DroneEnv)
     env.obstacles = env.obstacles
 
     return 0
+end
+
+
+### policy stuff
+function random_policy()
+    accel = 2*rand()-1
+    rotate = 0.1*(rand() - 0.5)
+    return DroneAction(accel, rotate)
+end
+
+function heuristic_policy(env::DroneEnv)
+    angle_to_target = atan(env.target.y - env.drone.y, env.target.x - env.drone.x)
+
+    distance_to_target = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])
+
+    if abs(angle_to_target-env.drone.theta) > 0.1
+        accel = 0
+    else
+        accel = distance_to_target
+    end
+    rotate = angle_to_target - env.drone.theta
+
+    return DroneAction(accel, rotate)
 end
 
 
@@ -251,7 +283,7 @@ function _rotate(x, y, angle)
 end
 
 ### plot 1 frame of environment
-function plot_frame(env::DroneEnv; show=true)
+function plot_frame(env::DroneEnv; show=true, t=nothing)
     p = plot(size=(800, 800), xlim=(0, env.size[1]), ylim=(0, env.size[2]), legend=false)
 
     plot_target(p, env, label="Target Region", color=:red)
@@ -262,6 +294,9 @@ function plot_frame(env::DroneEnv; show=true)
     rotated_x, rotated_y = _rotate(x, y, env.drone.theta)
 
     plot!([env.drone.x], [env.drone.y], mark=Shape(rotated_x, rotated_y), markersize=75, color=:blue, label="Drone", legend=:topright)
+    if !isnothing(t)
+        annotate!(env.size[1]/2, env.size[2]-2, text("t=$t", :center, 12))
+    end
 
     if show
         display(p)
@@ -270,7 +305,7 @@ end
 
 function create_animation(batch_env::Vector{DroneEnv})
     anim = @animate for i in eachindex(batch_env)
-        plot_frame(batch_env[i], show=false)
+        plot_frame(batch_env[i], show=false, t=i)
     end
 
     return anim

@@ -19,7 +19,7 @@ struct Actor
 end
 
 ## actor constructor
-function Actor(input_size, output_size)
+function Actor(input_size::Int, output_size::Int)
     model = Chain(
                 Dense(input_size, 64, tanh),
                 Dense(64, 64, tanh),
@@ -79,9 +79,9 @@ end
 ### get action
 function get_action(ppo::PPO)
     s = get_state(ppo.env.drone)
-    # x = actor.model(s)
-    μ = ppo.actor.μ(s)
-    σ = exp.(clamp.(ppo.actor.logstd(s), -0.5, 0.5))
+    x = ppo.actor.model(s)
+    μ = ppo.actor.μ(x)
+    σ = exp.(clamp.(ppo.actor.logstd(x), -0.5, 0.5))
 
     # create distribution using mean and std of action based on state
     dist = [Normal(μ[i], σ[i]) for i in 1:2]
@@ -141,6 +141,7 @@ function rollout(ppo::PPO)
             push!(batch_log_probs, log_prob)
 
             if done
+                println("Solved in rollout")
                 break
             end
         end
@@ -175,9 +176,10 @@ function evaluate(ppo::PPO, batch_obs, batch_acts)
     V = reduce(vcat, [ppo.critic(get_state(obs)) for obs in batch_obs]);
 
     s = [get_state(obs) for obs in batch_obs];
-    μ = ppo.actor.μ.(s)
-    logstd = ppo.actor.logstd.(s)
-    logstd = [clamp.(logstd[i], -0.5f0, 0.5f0) for i in eachindex(logstd)]
+    x = ppo.actor.model.(s)
+    μ = ppo.actor.μ.(x)
+    logstd = ppo.actor.logstd.(x)
+    logstd = [clamp.(logstd[i], -0.2f0, 0.2f0) for i in eachindex(logstd)]
     σ = [exp.(logstd[i]) for i in eachindex(logstd)]
 
     # create distribution from batch observations
@@ -217,6 +219,7 @@ function _run(ppo::PPO)
         push!(ep_rewards, r)
 
         if done
+            println("Solved")
             break
         end
     end
@@ -226,32 +229,33 @@ end
 
 
 ### learning update
-function learn(ppo::PPO)
-    total_timesteps = ppo.hyperparameters["total_timesteps"]
-    max_timesteps_per_episode = ppo.hyperparameters["max_timesteps_per_episode"]
-    lr = ppo.hyperparameters["lr"]
-    clip = ppo.hyperparameters["clip"]
+function learn(ppo_network::PPO)
+    total_timesteps = ppo_network.hyperparameters["total_timesteps"]
+    max_timesteps_per_episode = ppo_network.hyperparameters["max_timesteps_per_episode"]
+    lr = ppo_network.hyperparameters["lr"]
+    clip = ppo_network.hyperparameters["clip"]
 
     t_so_far = 0
     i_so_far = 0
 
-    actor_losses = []
-    critic_losses = []
+    actor_losses = Vector{Float32}()
+    critic_losses = Vector{Float32}()
+    policy_rewards = Vector{Vector{Float32}}()
     
     while t_so_far < total_timesteps
         
-        batch_obs, batch_acts, batch_log_probs, batch_rtgo, batch_lens = rollout(ppo)
+        batch_obs, batch_acts, batch_log_probs, batch_rtgo, batch_lens = rollout(ppo_network)
         
         t_so_far += sum(batch_lens)
         i_so_far += 1
         
-        V, _ = evaluate(ppo, batch_obs, batch_acts)
+        V, _ = evaluate(ppo_network, batch_obs, batch_acts)
         
         A_k = batch_rtgo[1] - deepcopy(V)
         A_k = (A_k .- mean(A_k)) ./ (std(A_k) .+ 1e-10)
     
         for _ in (1:max_timesteps_per_episode)
-            V, curr_log_probs = evaluate(ppo, batch_obs, batch_acts)
+            V, curr_log_probs = evaluate(ppo_network, batch_obs, batch_acts)
 
             ratios = curr_log_probs - transpose(hcat(batch_log_probs...))
 
@@ -263,32 +267,34 @@ function learn(ppo::PPO)
             critic_loss = mse(V, batch_rtgo[1])
 
             actor_optim = Adam(lr)
-            gs = gradient(() -> actor_loss, params(ppo.actor.model))
-            update!(actor_optim, params(ppo.actor.model), gs)
+            gs = gradient(() -> actor_loss, params(ppo_network.actor.model))
+            update!(actor_optim, params(ppo_network.actor.model), gs)
 
             
             critic_optim = Adam(lr)
-            gs = gradient(() -> critic_loss, params(ppo.critic.model))
-            update!(critic_optim, params(ppo.critic.model), gs)
+            gs = gradient(() -> critic_loss, params(ppo_network.critic.model))
+            update!(critic_optim, params(ppo_network.critic.model), gs)
 
             push!(actor_losses, actor_loss)
             push!(critic_losses, critic_loss)
         end
 
         if i_so_far % 10 == 0
-            batch_env, _ = _run(ppo)
+            batch_env, rewards = _run(ppo_network)
+            push!(policy_rewards, rewards)
+
             animation = create_animation(batch_env)
             gif(animation, "animations/ppo_$i_so_far.gif")
-            @save "models/ppo_$i_so_far.bson" ppo
+            @save "models/ppo_$i_so_far.bson" ppo_network
         end
 
         println("-----------  Iteration #$i_so_far  -----------")
         println("Timesteps so far: $t_so_far")
         println("-----------     END SUMMARY      -----------\n")
 
-        @save "models/ppo_final.bson" ppo
+        @save "models/ppo_final.bson" ppo_network
     end
-    return actor_losses, critic_losses
+    return actor_losses, critic_losses, policy_rewards
 end
 
 

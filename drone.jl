@@ -129,20 +129,6 @@ function POMDPs.transition(env::DroneEnv, action::DroneAction)
     x_new += randn()*0.05 # add some randomness
     y_new += randn()*0.05
 
-    # check for out of bounds
-    if x_new >= env.size[1]
-        x_new = env.size[1]
-    end
-    if x_new <= 0
-        x_new = 0
-    end
-    if y_new >= env.size[2]
-        y_new = env.size[2]
-    end
-    if y_new <= 0
-        y_new = 0
-    end
-
     # update drone state in env
     new_state = DroneState(x_new, y_new, v_new, theta_new)
     env.drone = new_state
@@ -173,6 +159,11 @@ function isterminal(env::DroneEnv)
         end
     end
 
+    # check for out of bounds
+    if env.drone.x >= env.size[1] || env.drone.x <= 0 || env.drone.y >= env.size[2] || env.drone.y <= 0
+        return 3
+    end
+
     return 0
 end
 
@@ -181,6 +172,8 @@ function POMDPs.reward(env::DroneEnv)
     if isterminal(env) == 1
         return 100.0
     elseif isterminal(env) == 2
+        return -100.0
+    elseif isterminal(env) == 3
         return -100.0
     else
         r = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])

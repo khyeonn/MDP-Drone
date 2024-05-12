@@ -81,14 +81,14 @@ function get_action(ppo::PPO)
     s = get_state(ppo.env.drone)
     x = ppo.actor.model(s)
     μ = ppo.actor.μ(x)
-    σ = exp.(clamp.(ppo.actor.logstd(x), -0.5, 0.5))
+    σ = exp.(clamp.(ppo.actor.logstd(x), -2.0, 2.0))
 
     # create distribution using mean and std of action based on state
     dist = [Normal(μ[i], σ[i]) for i in 1:2]
 
     # sample action from distribution
-    accel = clamp(rand(dist[1]), -ppo.env.max_acceleration, ppo.env.max_acceleration)
-    rotate = clamp(rand(dist[2]), -ppo.env.max_rotation_rate, ppo.env.max_rotation_rate)
+    accel = rand(dist[1])
+    rotate = rand(dist[2])
 
     a = DroneAction(accel, rotate)
 
@@ -141,7 +141,6 @@ function rollout(ppo::PPO)
             push!(batch_log_probs, log_prob)
 
             if done
-                println("Solved in rollout")
                 break
             end
         end
@@ -179,7 +178,7 @@ function evaluate(ppo::PPO, batch_obs, batch_acts)
     x = ppo.actor.model.(s)
     μ = ppo.actor.μ.(x)
     logstd = ppo.actor.logstd.(x)
-    logstd = [clamp.(logstd[i], -0.2f0, 0.2f0) for i in eachindex(logstd)]
+    logstd = [clamp.(logstd[i], -2.0f0, 2.0f0) for i in eachindex(logstd)]
     σ = [exp.(logstd[i]) for i in eachindex(logstd)]
 
     # create distribution from batch observations
@@ -219,7 +218,6 @@ function _run(ppo::PPO)
         push!(ep_rewards, r)
 
         if done
-            println("Solved")
             break
         end
     end

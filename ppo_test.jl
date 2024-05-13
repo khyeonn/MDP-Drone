@@ -8,7 +8,7 @@ using Statistics: mean
 using Plots
 using BSON: @load
 
-@load "models/ppo_10.bson" ppo_network
+@load "models/ppo_200.bson" ppo_network
 
 
 function rollout(ppo::PPO; max_episodes = 100)

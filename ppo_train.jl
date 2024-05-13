@@ -35,7 +35,7 @@ function plot_rewards(reward_vector)
 end
 
 hyperparameters = Dict(
-        "max_timesteps_per_batch" => 10_000,
+        "batch_size" => 10_000,
         "max_timesteps_per_episode" => 2_000,
         "updates_per_iteration" => 20,
         "total_timesteps" => 10_000_000,

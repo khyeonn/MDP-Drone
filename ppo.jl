@@ -62,7 +62,7 @@ end
 # init default hyperparameters
 function PPO(env::DroneEnv, actor::Actor, critic::Critic;
     hyperparameters = Dict(
-        "max_timesteps_per_batch" => 1000,
+        "batch_size" => 1000,
         "max_timesteps_per_episode" => 100,
         "updates_per_iteration" => 5,
         "total_timesteps" => 100_000,
@@ -107,8 +107,9 @@ end
 
 ### rollout
 function rollout(ppo::PPO)
-    max_timesteps_per_batch = ppo.hyperparameters["max_timesteps_per_batch"]
+    # max_timesteps_per_batch = ppo.hyperparameters["max_timesteps_per_batch"]
     max_timesteps_per_episode = ppo.hyperparameters["max_timesteps_per_episode"]
+    batch_size = ppo.hyperparameters["batch_size"]
 
     t = 0
 
@@ -123,7 +124,9 @@ function rollout(ppo::PPO)
 
     ep_rewards = Vector{Float32}()
 
-    while t < max_timesteps_per_batch
+    do_rollout = true
+
+    while do_rollout
         ep_rewards = Vector{Float32}()
 
         reset!(ppo.env)
@@ -147,9 +150,14 @@ function rollout(ppo::PPO)
             push!(batch_acts, action)
             push!(batch_log_probs, log_prob)
 
+            if size(batch_log_probs)[1] > batch_size
+                do_rollout = false
+                break
+            end
+
             if done
                 if isterminal(ppo.env) == 1
-                    println("Solved in rollout")
+                    # println("Solved in rollout")
                     # animation = create_animation(batch_env)
                     # gif(animation, "animations/rollout.gif")
                 end
@@ -256,27 +264,33 @@ function learn(ppo_network::PPO)
     while t_so_far < total_timesteps
         start_time = time()
 
-        batch_obs, batch_acts, batch_log_probs, batch_rtgo, batch_lens = rollout(ppo_network)
+        _, _, old_batch_log_probs, old_batch_rtgo, old_batch_lens = rollout(ppo_network)
         
-        t_so_far += sum(batch_lens)
+        t_so_far += sum(old_batch_lens)
         i_so_far += 1
         
-        V, _ = evaluate(ppo_network, batch_obs, batch_acts)
+        # V, _ = evaluate(ppo_network, old_batch_obs, old_batch_acts)
         
-        A_k = batch_rtgo - deepcopy(V)
-        A_k = (A_k .- mean(A_k)) ./ (std(A_k) .+ 1e-10)
+        # A_k = old_batch_rtgo - deepcopy(V)
+        # A_k = (A_k .- mean(A_k)) ./ (std(A_k) .+ 1e-10)
     
-        for _ in (1:updates_per_iteration)
+        for _ in 1:updates_per_iteration
+            batch_obs, batch_acts, _, batch_rtgo, _ = rollout(ppo_network)
             V, curr_log_probs = evaluate(ppo_network, batch_obs, batch_acts)
+            V_scaled = V*maximum(abs.(batch_rtgo)) / maximum(abs.(V))
 
-            ratios = exp.(curr_log_probs - transpose(hcat(batch_log_probs...)))
+            ratios = exp.(curr_log_probs - transpose(hcat(old_batch_log_probs...)))
+            ratios = ratios .+ 1e-8
+
+            A_k = batch_rtgo - deepcopy(V_scaled)
+            A_k = (A_k .- mean(A_k)) ./ (std(A_k) .+ 1e-10)
 
             # surrogate objectives
             surr1 = ratios .* A_k
             surr2 = clamp.(ratios, 1-clip, 1+clip) .* A_k
 
             actor_loss = -mean(min.(surr1, surr2))
-            critic_loss = mse(V, batch_rtgo)
+            critic_loss = mse(V_scaled, batch_rtgo)
 
             actor_opt = Adam(lr)
             actor_gs = gradient(() -> actor_loss, params(ppo_network.actor.model, ppo_network.actor.μ, ppo_network.actor.logstd))
@@ -300,8 +314,8 @@ function learn(ppo_network::PPO)
         end
 
         elapsed_time = time() - start_time
-        avg_ep_lens = mean(batch_lens)
-        avg_ep_reward = mean(batch_rtgo[1])
+        avg_ep_lens = mean(old_batch_lens)
+        avg_ep_reward = mean(old_batch_rtgo)
 
         ##### logging
         println("----------- Iteration #$i_so_far -----------")

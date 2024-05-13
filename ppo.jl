@@ -4,7 +4,7 @@ include("Drone.jl")
 using ..Drone: DroneEnv, DroneAction, DroneState, get_state, isterminal, discount, gen, reset!, create_animation
 
 using Plots
-using Flux: Chain, Dense, params, gradient, Optimise, Adam, mse, update!, leakyrelu
+using Flux: Chain, Dense, params, gradient, Optimise, Adam, mse, update!, leakyrelu, ignore
 using Distributions: Normal, logpdf
 using Statistics: mean, std
 using BSON: @save
@@ -56,6 +56,8 @@ mutable struct PPO
     env::DroneEnv
     actor::Actor
     critic::Critic
+    actor_loss
+    critic_loss
     hyperparameters::Dict{String, Real}
 end
 
@@ -69,8 +71,10 @@ function PPO(env::DroneEnv, actor::Actor, critic::Critic;
         "lr" => 1e-3,
         "clip" => 0.2
     ))
+    actor_loss = Vector{Float32}()
+    critic_loss = Vector{Float32}()
 
-    return PPO(env, actor, critic, hyperparameters)
+    return PPO(env, actor, critic, actor_loss, critic_loss, hyperparameters)
 end
 
 function _init_hyperparameters(ppo::PPO, hyperparameters::Dict{String, Real})
@@ -183,35 +187,35 @@ end
 
 
 ### evaluate
-function evaluate(ppo::PPO, batch_obs, batch_acts)
-    V = reduce(vcat, [ppo.critic(get_state(obs)) for obs in batch_obs])
+# function evaluate(ppo::PPO, batch_obs, batch_acts)
+#     V = reduce(vcat, [ppo.critic(get_state(obs)) for obs in batch_obs])
 
-    s = [get_state(obs) for obs in batch_obs];
-    x = ppo.actor.model.(s)
-    μ = ppo.actor.μ.(x)
-    logstd = ppo.actor.logstd.(x)
-    logstd = [clamp.(logstd[i], -5.0f0, 5.0f0) for i in eachindex(logstd)]
-    σ = [exp.(logstd[i]) for i in eachindex(logstd)]
+#     s = [get_state(obs) for obs in batch_obs];
+#     x = ppo.actor.model.(s)
+#     μ = ppo.actor.μ.(x)
+#     logstd = ppo.actor.logstd.(x)
+#     logstd = [clamp.(logstd[i], -5.0f0, 5.0f0) for i in eachindex(logstd)]
+#     σ = [exp.(logstd[i]) for i in eachindex(logstd)]
 
-    # create distribution from batch observations
-    dist_accel = [Normal(μ[i][1], σ[i][1]) for i in eachindex(x)]
-    dist_rotate = [Normal(μ[i][2], σ[i][2]) for i in eachindex(x)]
+#     # create distribution from batch observations
+#     dist_accel = [Normal(μ[i][1], σ[i][1]) for i in eachindex(x)]
+#     dist_rotate = [Normal(μ[i][2], σ[i][2]) for i in eachindex(x)]
 
-    accel = [batch_acts[i].accel for i in eachindex(batch_acts)]
-    rotate = [batch_acts[i].rotate for i in eachindex(batch_acts)]
+#     accel = [batch_acts[i].accel for i in eachindex(batch_acts)]
+#     rotate = [batch_acts[i].rotate for i in eachindex(batch_acts)]
 
-    # compute log probs of batch actions
-    log_prob_accel = [logpdf(dist_accel[i], accel[i]) for i in eachindex(batch_acts)]
-    log_prob_rotate = [logpdf(dist_rotate[i], rotate[i]) for i in eachindex(batch_acts)]
+#     # compute log probs of batch actions
+#     log_prob_accel = [logpdf(dist_accel[i], accel[i]) for i in eachindex(batch_acts)]
+#     log_prob_rotate = [logpdf(dist_rotate[i], rotate[i]) for i in eachindex(batch_acts)]
 
-    log_probs = [log_prob_accel, log_prob_rotate]
+#     log_probs = [log_prob_accel, log_prob_rotate]
 
-    # reshape 
-    log_probs = hcat(log_probs...)
-    log_probs = reshape(log_probs, :, size(log_probs, 2))
+#     # reshape 
+#     log_probs = hcat(log_probs...)
+#     log_probs = reshape(log_probs, :, size(log_probs, 2))
 
-    return V, log_probs
-end
+#     return V, log_probs
+# end
 
 
 ### run model
@@ -241,6 +245,54 @@ end
 
 ### learning update
 function learn(ppo_network::PPO)
+
+    function actor_loss_fn(ppo::PPO, batch_obs, batch_acts, batch_log_probs, A_k)
+        clip = ppo.hyperparameters["clip"]
+
+        s = [get_state(obs) for obs in batch_obs];
+        x = ppo.actor.model.(s)
+        μ = ppo.actor.μ.(x)
+        logstd = ppo.actor.logstd.(x)
+        logstd = [clamp.(logstd[i], -5.0f0, 5.0f0) for i in eachindex(logstd)]
+        σ = [exp.(logstd[i]) for i in eachindex(logstd)]
+
+        # create distribution from batch observations
+        dist_accel = [Normal(μ[i][1], σ[i][1]) for i in eachindex(x)]
+        dist_rotate = [Normal(μ[i][2], σ[i][2]) for i in eachindex(x)]
+
+        accel = [batch_acts[i].accel for i in eachindex(batch_acts)]
+        rotate = [batch_acts[i].rotate for i in eachindex(batch_acts)]
+
+        # compute log probs of batch actions
+        log_prob_accel = [logpdf(dist_accel[i], accel[i]) for i in eachindex(batch_acts)]
+        log_prob_rotate = [logpdf(dist_rotate[i], rotate[i]) for i in eachindex(batch_acts)]
+
+        log_probs = [log_prob_accel, log_prob_rotate]
+
+        # reshape 
+        log_probs = hcat(log_probs...)
+        log_probs = reshape(log_probs, :, size(log_probs, 2))
+
+        ratios = exp.(log_probs - transpose(hcat(batch_log_probs...)))
+
+        surr1 = ratios .* A_k
+        surr2 = clamp.(ratios, 1-clip, 1+clip) .* A_k
+
+        actor_loss = -mean(min.(surr1, surr2))
+
+        return actor_loss
+    end
+
+    function critic_loss_fn(ppo::PPO, batch_obs, batch_rtgo)
+        V = reduce(vcat, [ppo.critic(get_state(obs)) for obs in batch_obs])
+        V_scaled = V*maximum(abs.(batch_rtgo)) / maximum(abs.(V))
+
+        critic_loss = mse(V_scaled, batch_rtgo)
+
+        return critic_loss
+    end
+
+
     total_timesteps = ppo_network.hyperparameters["total_timesteps"]
     updates_per_iteration = ppo_network.hyperparameters["updates_per_iteration"]
     lr = ppo_network.hyperparameters["lr"]
@@ -249,8 +301,6 @@ function learn(ppo_network::PPO)
     t_so_far = 0
     i_so_far = 0
 
-    actor_losses = Vector{Float32}()
-    critic_losses = Vector{Float32}()
     policy_rewards = Vector{Vector{Float32}}()
     
     while t_so_far < total_timesteps
@@ -261,6 +311,7 @@ function learn(ppo_network::PPO)
         t_so_far += sum(batch_lens)
         i_so_far += 1
         
+<<<<<<< Updated upstream
         V, _ = evaluate(ppo_network, batch_obs, batch_acts)
         
         A_k = batch_rtgo - deepcopy(V)
@@ -277,20 +328,33 @@ function learn(ppo_network::PPO)
 
             actor_loss = -mean(min.(surr1, surr2))
             critic_loss = mse(V, batch_rtgo)
+=======
+        V = reduce(vcat, [ppo_network.critic(get_state(obs)) for obs in batch_obs])
+        V_scaled = V*maximum(abs.(batch_rtgo)) / maximum(abs.(V))
+        
+        A_k = batch_rtgo - deepcopy(V_scaled)
+        A_k = (A_k .- mean(A_k)) ./ (std(A_k) .+ 1e-10)
+    
+        for _ in 1:updates_per_iteration
+            # critic_loss = mse(V_scaled, batch_rtgo)
+>>>>>>> Stashed changes
 
             actor_opt = Adam(lr)
-            actor_gs = gradient(() -> actor_loss, params(ppo_network.actor.model, ppo_network.actor.μ, ppo_network.actor.logstd))
+            actor_gs = gradient(() -> actor_loss_fn(ppo_network, batch_obs, batch_acts, batch_log_probs, A_k), params(ppo_network.actor.model, ppo_network.actor.μ, ppo_network.actor.logstd))
             update!(actor_opt, params(ppo_network.actor.model, ppo_network.actor.μ, ppo_network.actor.logstd), actor_gs)
 
             critic_opt = Adam(lr)
-            critic_gs = gradient(() -> critic_loss, params(ppo_network.critic.model))
+            critic_gs = gradient(() -> critic_loss_fn(ppo_network, batch_obs, batch_rtgo), params(ppo_network.critic.model))
             update!(critic_opt, params(ppo_network.critic.model), critic_gs)
 
-            push!(actor_losses, actor_loss)
-            push!(critic_losses, critic_loss)
+            ignore() do
+                # push!(ppo_network.actor_loss, actor_loss_fn(ppo_network, batch_obs, batch_acts, batch_log_probs, A_k))
+                push!(ppo_network.critic_loss, critic_loss_fn(ppo_network, batch_obs, batch_rtgo))
+            end
         end
 
-        if i_so_far % 50 == 0
+
+        if i_so_far % 500 == 0
             batch_env, rewards = _run(ppo_network)
             push!(policy_rewards, rewards)
 
@@ -301,7 +365,11 @@ function learn(ppo_network::PPO)
 
         elapsed_time = time() - start_time
         avg_ep_lens = mean(batch_lens)
+<<<<<<< Updated upstream
         avg_ep_reward = mean(batch_rtgo[1])
+=======
+        avg_ep_reward = mean(batch_rtgo)
+>>>>>>> Stashed changes
 
         ##### logging
         println("----------- Iteration #$i_so_far -----------")
@@ -313,7 +381,7 @@ function learn(ppo_network::PPO)
 
         @save "models/ppo_final.bson" ppo_network
     end
-    return actor_losses, critic_losses, policy_rewards
+    return ppo_network.actor_loss, ppo_network.critic_loss, policy_rewards
 end
 
 

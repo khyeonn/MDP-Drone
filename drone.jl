@@ -173,10 +173,15 @@ end
 function POMDPs.reward(env::DroneEnv)
     angle_to_target = atan(env.target.y - env.drone.y, env.target.x - env.drone.x)
     distance_to_target = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])
+<<<<<<< Updated upstream
     r = -(0.1 + 0.1*abs(angle_to_target-env.drone.theta) + 0.1*distance_to_target)
 
+=======
+    r = -(0.1 + 0.2*distance_to_target)
+ 
+>>>>>>> Stashed changes
     if isterminal(env) == 1
-        return 100.0
+        return 500.0
     elseif isterminal(env) == 2
         return -100.0
     elseif isterminal(env) == 3

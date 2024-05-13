@@ -311,24 +311,6 @@ function learn(ppo_network::PPO)
         t_so_far += sum(batch_lens)
         i_so_far += 1
         
-<<<<<<< Updated upstream
-        V, _ = evaluate(ppo_network, batch_obs, batch_acts)
-        
-        A_k = batch_rtgo - deepcopy(V)
-        A_k = (A_k .- mean(A_k)) ./ (std(A_k) .+ 1e-10)
-    
-        for _ in (1:updates_per_iteration)
-            V, curr_log_probs = evaluate(ppo_network, batch_obs, batch_acts)
-
-            ratios = exp.(curr_log_probs - transpose(hcat(batch_log_probs...)))
-
-            # surrogate objectives
-            surr1 = ratios .* A_k
-            surr2 = clamp.(ratios, 1-clip, 1+clip) .* A_k
-
-            actor_loss = -mean(min.(surr1, surr2))
-            critic_loss = mse(V, batch_rtgo)
-=======
         V = reduce(vcat, [ppo_network.critic(get_state(obs)) for obs in batch_obs])
         V_scaled = V*maximum(abs.(batch_rtgo)) / maximum(abs.(V))
         
@@ -337,7 +319,6 @@ function learn(ppo_network::PPO)
     
         for _ in 1:updates_per_iteration
             # critic_loss = mse(V_scaled, batch_rtgo)
->>>>>>> Stashed changes
 
             actor_opt = Adam(lr)
             actor_gs = gradient(() -> actor_loss_fn(ppo_network, batch_obs, batch_acts, batch_log_probs, A_k), params(ppo_network.actor.model, ppo_network.actor.μ, ppo_network.actor.logstd))
@@ -365,11 +346,7 @@ function learn(ppo_network::PPO)
 
         elapsed_time = time() - start_time
         avg_ep_lens = mean(batch_lens)
-<<<<<<< Updated upstream
-        avg_ep_reward = mean(batch_rtgo[1])
-=======
         avg_ep_reward = mean(batch_rtgo)
->>>>>>> Stashed changes
 
         ##### logging
         println("----------- Iteration #$i_so_far -----------")

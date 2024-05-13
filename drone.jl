@@ -14,7 +14,7 @@ const STEP_SIZE = 0.001
 const DEFAULT_DISCOUNT = 0.99
 const DEFAULT_MAX_VELOCITY = 1.0 
 const DEFAULT_MAX_ACCELERATION = 1.0
-const DEFAULT_MAX_ROTATION_RATE = 0.05 
+const DEFAULT_MAX_ROTATION_RATE = 0.5
 const DEFAULT_OBSTACLES = 10
 const DEFAULT_STATE = (2.0, 2.0, 0.0, 0.0)
 
@@ -69,14 +69,14 @@ function DroneEnv(;
         )
     initial_state = drone
     ## for testing purposes
-    Random.seed!(1)
+    rng = MersenneTwister(1)
 
     ## set random target location
-    target_x, target_y = rand(1:STEP_SIZE:size[1]), rand(1:STEP_SIZE:size[2])
+    target_x, target_y = rand(rng, 1:STEP_SIZE:size[1]), rand(1:STEP_SIZE:size[2])
     target = Target(target_x, target_y, target_radius)
 
     ## define random obstacles
-    obstacles = generate_obstacles(size, num_obstacles, target)
+    obstacles = generate_obstacles(size, num_obstacles, target, rng=rng)
 
     isterminal = false
 
@@ -85,19 +85,19 @@ end
 
 
 ## generate random obstacles
-function generate_obstacles(size::Tuple{Float64, Float64}, num_obstacles::Int64, target::Target)
+function generate_obstacles(size::Tuple{Float64, Float64}, num_obstacles::Int64, target::Target; rng=MersenneTwister(1))
     obstacles = Vector{Obstacle}()
     min_radius= 2.5
     max_radius = 7.5
 
     for _ in 1:num_obstacles
-        obstacle_x, obstacle_y = rand(1:STEP_SIZE:size[1]), rand(1:STEP_SIZE:size[2])
-        obstacle_r = rand(min_radius:STEP_SIZE:max_radius)
+        obstacle_x, obstacle_y = rand(rng, 1:STEP_SIZE:size[1]), rand(rng, 1:STEP_SIZE:size[2])
+        obstacle_r = rand(rng, min_radius:STEP_SIZE:max_radius)
 
         ## if target and obstacle regions overlap, generate new obstacle
         while norm([target.x, target.y] - [obstacle_x, obstacle_y]) < target.r + obstacle_r
-            obstacle_x, obstacle_y = rand(1:STEP_SIZE:size[1]), rand(1:STEP_SIZE:size[2])
-            obstacle_r = rand(min_radius:STEP_SIZE:max_radius)
+            obstacle_x, obstacle_y = rand(rng, 1:STEP_SIZE:size[1]), rand(rng, 1:STEP_SIZE:size[2])
+            obstacle_r = rand(rng, min_radius:STEP_SIZE:max_radius)
         end
 
         obstacle = Obstacle(obstacle_x, obstacle_y, obstacle_r)
@@ -111,8 +111,8 @@ end
 ### transition function
 function POMDPs.transition(env::DroneEnv, action::DroneAction)
     # scale actions
-    accel = action.accel/10
-    rotate = action.rotate/20
+    accel = action.accel
+    rotate = action.rotate/2
 
     # update heading angle
     theta_new = env.drone.theta + clamp(rotate, -env.max_rotation_rate, env.max_rotation_rate)
@@ -146,11 +146,13 @@ end
 
 ### terminal condition handling
 function isterminal(env::DroneEnv)
+    # reached goal
     distance_to_target = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])
     if distance_to_target <= env.target.r
         return 1
     end
 
+    # hit obstacle
     for i in 1:env.num_obstacles
         distance_to_obstacle = get_distance([env.drone.x, env.drone.y], [env.obstacles[i].x, env.obstacles[i].y])
 
@@ -159,7 +161,7 @@ function isterminal(env::DroneEnv)
         end
     end
 
-    # check for out of bounds
+    # out of bounds
     if env.drone.x >= env.size[1] || env.drone.x <= 0 || env.drone.y >= env.size[2] || env.drone.y <= 0
         return 3
     end
@@ -169,6 +171,10 @@ end
 
 ### reward function
 function POMDPs.reward(env::DroneEnv)
+    angle_to_target = atan(env.target.y - env.drone.y, env.target.x - env.drone.x)
+    distance_to_target = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])
+    r = -(0.1 + 0.1*abs(angle_to_target-env.drone.theta) + 0.1*distance_to_target)
+
     if isterminal(env) == 1
         return 100.0
     elseif isterminal(env) == 2
@@ -176,8 +182,7 @@ function POMDPs.reward(env::DroneEnv)
     elseif isterminal(env) == 3
         return -100.0
     else
-        r = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])
-        return -r
+        return r
     end
 end
 

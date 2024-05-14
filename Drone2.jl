@@ -12,11 +12,10 @@ using Plots
 export DroneState, DroneAct, Circle, Env, DroneMDP, render
 
 # State of a Drone.
-struct DroneState <: FieldVector{4, Float32}
+struct DroneState <: FieldVector{3, Float32}
     x::Float32 # x location in meters
     y::Float32 # y location in meters
     theta::Float32 # orientation in radian
-    status::Int64 # indicator whether robot has reached goal state or crashed
 end
 
 # Struct for a Drone action
@@ -61,6 +60,8 @@ end
 
 # Define the Drone MDP.
 mutable struct DroneMDP <: MDP{DroneState, DroneAct}
+    drone::DroneState
+    init_state::DroneState
     v_max::Float32 # maximum velocity of Drone [m/s]
     om_max::Float32 # maximum turn-rate of Drone [rad/s]
     dt::Float32 # simulation time-step [s]
@@ -72,28 +73,32 @@ mutable struct DroneMDP <: MDP{DroneState, DroneAct}
     num_obstacles::Int64
     goal::Circle
     env::Env
+    status::Int64 # indicator whether robot has reached goal state or crashed
 end
 
 # function init Drone MDP.
 function DroneMDP(;
+            drone = DroneState(25,25,0),
+            init_state = DroneState(25,25,0),
             v_max=2.0, 
             om_max=1.0, 
-            dt=1.0, 
+            dt=0.5, 
             pen=-1000.0, 
             time_pen=-1.0, 
             goal_reward=100.0,
             discount=0.95,
             size=SVector(SVector(Float32(0.0), Float32(50.0)), SVector(Float32(0.0),Float32( 50.0))),
+            status=0,
             num_obstacles=10)
             Random.seed!(1)
             goal= Circle(rand(size[1][1]:size[1][2]), rand(size[2][1]:size[2][2]), 5.0)
             env = Env(goal,generate_obstacles(size,num_obstacles,goal))
-        return DroneMDP(v_max,om_max,dt,pen,time_pen,goal_reward,discount,
-                        size,num_obstacles,goal,env)
+        return DroneMDP(drone,init_state,v_max,om_max,dt,pen,time_pen,goal_reward,discount,
+                        size,num_obstacles,goal,env,status)
 end
 
 # transition Drone state given curent state and action
-POMDPs.transition(m::DroneMDP, s::DroneState, a::DroneAct) = get_next_state(m, s, a)
+POMDPs.transition(m::DroneMDP,s::DroneState, a::DroneAct) = get_next_state(m,m.drone,a)
 
 # terminal condition handling
 function terminal(m::DroneMDP,x,y)
@@ -118,12 +123,12 @@ function terminal(m::DroneMDP,x,y)
 end
 
 # next statse function
-function get_next_state(m::DroneMDP, s::DroneState, a::DroneAct)
+function get_next_state(m::DroneMDP,s::DroneState, a::DroneAct)
     v, om = a
     v = clamp(v, -m.v_max, m.v_max)
     om = clamp(om, -m.om_max, m.om_max)
 
-    x, y, th, status = s
+    x, y, th = s
     dt = m.dt
 
     # dynamics assume drone rotates and then translates
@@ -135,40 +140,54 @@ function get_next_state(m::DroneMDP, s::DroneState, a::DroneAct)
     des_step = v*dt
     pos = p0 + des_step*heading
 
-    # Determine whether reached goal, obstacle or out of bounds
-    next_status =  terminal(m,pos[1],pos[2])
-        
-    
-
     # define next state
-    return DroneState(pos[1], pos[2], next_th, next_status)
+    return DroneState(pos[1], pos[2], next_th)
 end
 
 # defines reward function R(s,a,s')
 
-function POMDPs.reward(m::DroneMDP,s::DroneState, a::DroneAct,sp::DroneState)
+function POMDPs.reward(m::DroneMDP,s::DroneState,a::DroneAct)
     # penalty for each timestep elapsed
     cum_reward = m.time_pen
 
     # terminal rewards
-    cum_reward += m.goal_reward*(sp.status == 1)
-    cum_reward += m.pen*(sp.status == -1)
+    cum_reward += m.goal_reward*(m.status == 1)
+    cum_reward += m.pen*(m.status == -1)
 
     return cum_reward  
 end
 
 # determine if a terminal state has been reached
-POMDPs.isterminal(m::DroneMDP, s::DroneState) = abs(s.status) > 0.0
+POMDPs.isterminal(m::DroneMDP) = abs(m.status) > 0.0
 
 # define discount factor
 POMDPs.discount(m::DroneMDP) = m.discount
 
 # generate next state sp, and reward r 
-function POMDPs.gen(m::DroneMDP,s::DroneState, action::DroneAct)
-    sp = transition(m,s, action)
-    r = reward(m,s,action,sp)
+function POMDPs.gen(m::DroneMDP, action::DroneAct)
+    sp = transition(m,m.drone,action)
+    r = reward(m,m.drone,action)
 
     return sp, r
+end
+
+function act!(m::DroneMDP, action::DroneAct)
+    sp = transition(m,m.drone,action)
+    if m.status == 0
+        next_status =  terminal(m,sp.x,sp.y)
+        m.status =next_status
+    end
+    r = reward(m,m.drone,action)
+    m.drone = sp
+    done = isterminal(m)
+    return sp, r, done
+end
+
+
+function reset!(m::DroneMDP)
+    m.drone = m.init_state
+    m.status = 0
+    return m.drone
 end
 
 #Generate points for the circle
@@ -180,7 +199,8 @@ function plot_circle(x, y, r, fill_color=:none)
 end
 
 ##Render MDP 
-function render(m::DroneMDP,s=DroneState(0.0, 0.0, 0.0, 0.0); show=true, t=nothing)
+function render(m::DroneMDP; show=true, t=nothing)
+    s = m.drone
     p = plot(size=(600, 600), xlim=(m.size[1][1]-2, m.size[1][2]+2), ylim=(m.size[2][1]-2, m.size[2][2]+2), legend=false)
     xticks!(0:5:m.size[1][2]+1)
     yticks!(0:5:m.size[2][2]+1)

@@ -376,5 +376,47 @@ function learn(ppo_network::PPO)
     return ppo_network.actor_loss, ppo_network.critic_loss, policy_rewards
 end
 
+## test network
+function ppo_test(ppo::PPO; n_episodes = 1000)
+    rewards = Vector{Float32}()
+    batch_lens = Vector{Int64}()
+    episode_env = Vector{DroneEnv}()
+    batch_env = Vector{Vector{DroneEnv}}()
+    episode_acts = Vector{DroneAction}()
+    batch_acts = Vector{Vector{DroneAction}}()
+    dones = 0
+
+    for _ in 1:n_episodes
+        reset!(ppo.env)
+        empty!(episode_env)
+        empty!(episode_acts)
+
+        ep_rewards = 0.0
+        ep_len = 0
+
+        for t in 1:ppo.hyperparameters["max_timesteps_per_episode"]
+            action, _ = get_action(ppo)
+            _, r, done = gen(ppo.env, action)
+
+            push!(episode_env, deepcopy(ppo.env))
+            push!(episode_acts, deepcopy(action))
+
+            ep_rewards += r
+            ep_len = t
+
+            if done
+                if isterminal(ppo.env) == 1
+                    dones += 1
+                end
+                break
+            end
+        end
+        push!(batch_env, deepcopy(episode_env))
+        push!(batch_acts, episode_acts)
+        push!(rewards, ep_rewards)
+        push!(batch_lens, ep_len)
+    end
+    return rewards, batch_lens, batch_env, batch_acts, dones
+end
 
 end # module

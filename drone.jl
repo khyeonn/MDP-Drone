@@ -16,7 +16,7 @@ const DEFAULT_MAX_VELOCITY = 1.0
 const DEFAULT_MAX_ACCELERATION = 1.0
 const DEFAULT_MAX_ROTATION_RATE = 0.5
 const DEFAULT_OBSTACLES = 10
-const DEFAULT_STATE = (2.0, 2.0, 0.0, 0.0)
+const DEFAULT_STATE = (10.0, 10.0, 0.0, 0.0)
 
 struct DroneState
     x::Float32 
@@ -129,6 +129,19 @@ function POMDPs.transition(env::DroneEnv, action::DroneAction)
     x_new += randn()*0.05 # add some randomness
     y_new += randn()*0.05
 
+    if env.drone.x >= env.size[1]
+        x_new = env.size[1]
+    end
+    if env.drone.x <= 0 
+        x_new = 0
+    end
+    if env.drone.y >= env.size[2] 
+        y_new = env.size[2] 
+    end
+    if env.drone.y <= 0
+        y_new = 0
+    end
+
     # update drone state in env
     new_state = DroneState(x_new, y_new, v_new, theta_new)
     env.drone = new_state
@@ -155,7 +168,6 @@ function isterminal(env::DroneEnv)
     # hit obstacle
     for i in 1:env.num_obstacles
         distance_to_obstacle = get_distance([env.drone.x, env.drone.y], [env.obstacles[i].x, env.obstacles[i].y])
-
         if distance_to_obstacle <= env.obstacles[i].r
             return 2
         end
@@ -172,16 +184,25 @@ end
 ### reward function
 function POMDPs.reward(env::DroneEnv)
     distance_to_target = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])
-    r = -(0.1 + 0.5*distance_to_target)
- 
+    r_distance = 0.0
+    if distance_to_target <= 5.0
+        r_distance = 50.0
+    end
+    if distance_to_target <= 10.0
+        r_distance = 25.0
+    end
+    if distance_to_target <= 20.0
+        r_distance = 2.0
+    end
+
     if isterminal(env) == 1
-        return 500.0
+        return 1000.0
     elseif isterminal(env) == 2
-        return -100.0
+        return -500.0 + r_distance 
     elseif isterminal(env) == 3
-        return -100.0
+        return -1000.0 + r_distance
     else
-        return -0.1
+        return -1.0 + r_distance
     end
 end
 

@@ -2,7 +2,7 @@ if !@isdefined Drone
     include("Drone.jl")
     include("ppo.jl")
 end
-using .Drone: DroneEnv, DroneAction, plot_frame, reset!, gen, create_animation
+using .Drone: DroneEnv, DroneAction, plot_frame, reset!, gen, create_animation, isterminal
 using .ppo: PPO, Actor, Critic, get_action
 using Statistics: mean
 using Plots
@@ -11,9 +11,9 @@ using BSON: @load
 @load "models/ppo_final.bson" ppo_network
 
 
-function rollout(ppo::PPO; max_episodes = 100)
+function rollout(ppo::PPO; max_episodes = 1000)
     rewards = Vector{Float32}()
-    total_len = Vector{Int64}()
+    batch_lens = Vector{Int64}()
     episode_env = Vector{DroneEnv}()
     batch_env = Vector{Vector{DroneEnv}}()
     episode_acts = Vector{DroneAction}()
@@ -41,15 +41,17 @@ function rollout(ppo::PPO; max_episodes = 100)
                 break
             end
         end
-        push!(batch_env, episode_env)
+        push!(batch_env, deepcopy(episode_env))
         push!(batch_acts, episode_acts)
         push!(rewards, ep_rewards)
-        push!(total_len, ep_len)
+        push!(batch_lens, ep_len)
     end
-    return rewards, total_len, batch_env, batch_acts
+    return rewards, batch_lens, batch_env, batch_acts
 end
 
 rewards, ep_lengths, batch_env, batch_acts = rollout(ppo_network)
+p = plot(1:length(rewards), rewards, xlabel="Episodes", ylabel="Total rewards")
+display(p)
 
 i = argmax(rewards)
 animation = create_animation(batch_env[i])

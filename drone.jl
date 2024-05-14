@@ -181,7 +181,7 @@ function POMDPs.reward(env::DroneEnv)
     elseif isterminal(env) == 3
         return -100.0
     else
-        return r
+        return -0.1
     end
 end
 

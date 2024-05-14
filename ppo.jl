@@ -64,7 +64,7 @@ end
 # init default hyperparameters
 function PPO(env::DroneEnv, actor::Actor, critic::Critic;
     hyperparameters = Dict(
-        "max_timesteps_per_batch" => 1000,
+        "batch_size" => 200,
         "max_timesteps_per_episode" => 100,
         "updates_per_iteration" => 5,
         "total_timesteps" => 100_000,
@@ -111,7 +111,7 @@ end
 
 ### rollout
 function rollout(ppo::PPO)
-    max_timesteps_per_batch = ppo.hyperparameters["max_timesteps_per_batch"]
+    batch_size = ppo.hyperparameters["batch_size"]
     max_timesteps_per_episode = ppo.hyperparameters["max_timesteps_per_episode"]
 
     t = 0
@@ -127,7 +127,7 @@ function rollout(ppo::PPO)
 
     ep_rewards = Vector{Float32}()
 
-    while t < max_timesteps_per_batch
+    while length(batch_obs) <= batch_size
         ep_rewards = Vector{Float32}()
 
         reset!(ppo.env)
@@ -159,6 +159,11 @@ function rollout(ppo::PPO)
                 end
                 break
             end
+
+            if length(batch_obs) >= batch_size
+                break
+            end
+
         end
         push!(batch_lens, ep_timesteps)
         push!(batch_rewards, ep_rewards)

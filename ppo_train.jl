@@ -35,11 +35,14 @@ function plot_rewards(reward_vector)
 end
 
 hyperparameters = Dict(
-        "batch_size" => 1_000,
+        "batch_size" => 5_000,
+        "mini_batch_size" => 200,
         "max_timesteps_per_episode" => 5_000,
         "updates_per_iteration" => 5,
-        "total_timesteps" => 10_000_000,
-        "lr" => 5e-4,
+        "total_timesteps" => 60_000_000,
+        "soft_update_coeff" => 0.005,
+        "entropy_coeff" => 0.001,
+        "lr" => 1e-4,
         "clip" => 0.2
     )
 
@@ -47,8 +50,12 @@ env = DroneEnv()
 
 actor = Actor(4, 2)
 critic = Critic(4, 1) 
+start_time = time()
 actor_loss, critic_loss, rewards = train(env, actor, critic, hyperparameters=hyperparameters)
+println("Total training time was $(round(time() - start_time; digits=2))")
 
 plot_loss(actor_loss, "Actor loss")
+savefig("actor_loss.png")
 plot_loss(critic_loss, "Critic loss")
+savefig("critic_loss.png")
 plot_rewards(rewards)

@@ -1,11 +1,11 @@
 module ppo
 
 include("Drone.jl")
-using ..Drone: DroneEnv, DroneAction, DroneState, get_state, isterminal, discount, gen, reset!, create_animation
+using ..Drone: DroneEnv, DroneAction, DroneState, get_state, isterminal, discount, gen, reset!, create_animation, heuristic_policy
 
 using Plots
 using Flux: Chain, Dense, params, gradient, Optimise, Adam, mse, update!, leakyrelu, ignore, AdaGrad, Optimiser, ClipValue, BatchNorm, relu
-using Distributions: Normal, logpdf
+using Distributions: Normal, logpdf, sample
 using Statistics: mean, std
 using BSON: @save
 
@@ -42,7 +42,7 @@ function Critic(input_size::Int, output_size::Int)
         Dense(input_size, 128, tanh),
         Dense(128, 128, tanh),
         Dense(128, output_size))
-
+    
     return Critic(model)
 end
 
@@ -66,10 +66,13 @@ end
 # init default hyperparameters
 function PPO(env::DroneEnv, actor::Actor, critic::Critic;
     hyperparameters = Dict(
-        "batch_size" => 200,
+        "batch_size" => 1_000,
+        "mini_batch_size" => 200,
         "max_timesteps_per_episode" => 100,
-        "updates_per_iteration" => 5,
+        "update_interval" => 5,
         "total_timesteps" => 100_000,
+        "soft_update_coeff" => 0.005,
+        "entropy_coeff" => 0.001,
         "lr" => 1e-3,
         "clip" => 0.2
     ))
@@ -83,13 +86,12 @@ function _init_hyperparameters(ppo::PPO, hyperparameters::Dict{String, Real})
     merge!(ppo.hyperparameters, hyperparameters)
 end
 
-
 ### get action
 function get_action(ppo::PPO)
     s = get_state(ppo.env.drone)
     x = ppo.target_actor.model(s)
     μ = ppo.target_actor.μ(x)
-    σ = exp.(clamp.(ppo.target_actor.logstd(x), -3.0, 3.0))
+    σ = exp.(clamp.(ppo.target_actor.logstd(x), -0.5, 0.5))
 
     # create distribution using mean and std of action based on state
     dist = [Normal(μ[i], σ[i]) for i in 1:2]
@@ -98,8 +100,7 @@ function get_action(ppo::PPO)
     # apply tanh to clamp between -1 and 1
     ϵ = randn(Float32, size(σ))
     accel, rotate = tanh.(μ .+ σ .* ϵ)
-    # accel = tanh(rand(dist[1]))
-    # rotate = tanh(rand(dist[2]))
+
 
     # compute log probability of sampled action
     log_prob_accel = logpdf(dist[1], accel)
@@ -112,6 +113,21 @@ function get_action(ppo::PPO)
     return a, log_prob
 end
 
+##### compute reward to go
+function compute_rtgo(env, batch_rewards)
+    batch_rtgo = Vector{Float32}()
+
+    for ep_rewards in Iterators.reverse(batch_rewards)
+        discounted_reward = 0.0
+
+        for reward in Iterators.reverse(ep_rewards)
+            discounted_reward = reward + discounted_reward*env.discount
+            pushfirst!(batch_rtgo, deepcopy(discounted_reward))
+        end
+    end
+
+    return batch_rtgo
+end
 
 ### rollout
 function rollout(ppo::PPO)
@@ -127,9 +143,7 @@ function rollout(ppo::PPO)
     batch_rtgo = Vector{Float32}()
     batch_lens = Vector{Int64}()
     batch_dones = 0
-
     batch_env = Vector{DroneEnv}()
-
     ep_rewards = Vector{Float32}()
 
     while length(batch_obs) <= batch_size
@@ -146,14 +160,14 @@ function rollout(ppo::PPO)
             ep_timesteps = ep_t
             t += 1
 
-            push!(batch_obs, obs)
+            push!(batch_obs, deepcopy(obs))
             action, log_prob = get_action(ppo)
             obs, r, done = gen(ppo.env, action)
 
             push!(batch_env, deepcopy(ppo.env))
-            push!(ep_rewards, r)
-            push!(batch_acts, action)
-            push!(batch_log_probs, log_prob)
+            push!(ep_rewards, deepcopy(r))
+            push!(batch_acts, deepcopy(action))
+            push!(batch_log_probs, deepcopy(log_prob))
 
             if done
                 if isterminal(ppo.env) == 1
@@ -168,28 +182,11 @@ function rollout(ppo::PPO)
 
         end
         push!(batch_lens, ep_timesteps)
-        push!(batch_rewards, ep_rewards)
+        push!(batch_rewards, deepcopy(ep_rewards))
     end
     batch_rtgo = compute_rtgo(ppo.env, batch_rewards)
 
     return batch_obs, batch_acts, batch_log_probs, batch_rtgo, batch_lens, batch_dones
-end
-
-
-##### compute reward to go
-function compute_rtgo(env, batch_rewards)
-    batch_rtgo = Vector{Float32}()
-
-    for ep_rewards in Iterators.reverse(batch_rewards)
-        discounted_reward = 0.0
-
-        for reward in Iterators.reverse(ep_rewards)
-            discounted_reward = reward + discounted_reward*env.discount
-            pushfirst!(batch_rtgo, discounted_reward)
-        end
-    end
-
-    return batch_rtgo
 end
 
 
@@ -207,7 +204,7 @@ function _run(ppo::PPO)
         _, r, done = gen(ppo.env, action)
 
         push!(batch_env, deepcopy(ppo.env))
-        push!(ep_rewards, r)
+        push!(ep_rewards, deepcopy(r))
 
         if done
             break
@@ -219,13 +216,14 @@ end
 
 function actor_loss_fn(ppo::PPO, batch_obs, batch_acts, batch_log_probs, batch_rtgo)
     clip = ppo.hyperparameters["clip"]
+    entropy_coeff = ppo.hyperparameters["entropy_coeff"]
 
     # get model parameters
     s = [get_state(obs) for obs in batch_obs];
     x = ppo.actor.model.(s)
     μ = ppo.actor.μ.(x)
     logstd = ppo.actor.logstd.(x)
-    logstd = [clamp.(logstd[i], -3.0f0, 3.0f0) for i in eachindex(logstd)]
+    logstd = [clamp.(logstd[i], -0.5f0, 0.5f0) for i in eachindex(logstd)]
     σ = [exp.(logstd[i]) for i in eachindex(logstd)]
 
     # create distribution from batch observations
@@ -248,10 +246,8 @@ function actor_loss_fn(ppo::PPO, batch_obs, batch_acts, batch_log_probs, batch_r
     # compute value
     V = reduce(vcat, [ppo.critic(get_state(obs)) for obs in batch_obs])
 
-    # normalize values
+    # scale values
     V = V*maximum(abs.(batch_rtgo)) / (maximum(abs.(V)) + 1e-8)
-    # V = (V .- mean(V)) ./ (std(V) .+ 1e-8)
-    # batch_rtgo = (batch_rtgo .- mean(batch_rtgo)) ./ (std(batch_rtgo) .+ 1e-8)
     
     # compute advantages
     A_k = batch_rtgo - deepcopy(V)
@@ -265,7 +261,7 @@ function actor_loss_fn(ppo::PPO, batch_obs, batch_acts, batch_log_probs, batch_r
     surr2 = clamp.(ratios, 1-clip, 1+clip) .* A_k
 
     # compute actor loss
-    actor_loss = -mean(min.(surr1, surr2)) + mean((1 .- ratios).^2) + mean(ratios .*log_probs).*0.001
+    actor_loss = -mean(min.(surr1, surr2)) + mean(ratios.*log_probs).*entropy_coeff
 
     return actor_loss
 end
@@ -274,10 +270,8 @@ function critic_loss_fn(ppo::PPO, batch_obs, batch_rtgo)
     # compute value estimate
     V = reduce(vcat, [ppo.critic(get_state(obs)) for obs in batch_obs])
 
-    # normalize values
+    # scale values
     V = V*maximum(abs.(batch_rtgo)) / (maximum(abs.(V)) + 1e-8)
-    # V = (V .- mean(V)) ./ (std(V) .+ 1e-8)
-    # batch_rtgo = (batch_rtgo .- mean(batch_rtgo)) ./ (std(batch_rtgo) .+ 1e-8)
 
     # compute critic loss
     critic_loss = mse(V, batch_rtgo)
@@ -293,11 +287,12 @@ end
 
 ### learning update
 function learn(ppo_network::PPO)
-
     # hyper params
     total_timesteps = ppo_network.hyperparameters["total_timesteps"]
-    updates_per_iteration = ppo_network.hyperparameters["updates_per_iteration"]
+    update_interval = ppo_network.hyperparameters["update_interval"]
+    mini_batch_size = ppo_network.hyperparameters["mini_batch_size"]
     lr = ppo_network.hyperparameters["lr"]
+    soft_update_coeff = ppo_network.hyperparameters["soft_update_coeff"]
 
     # some variables to keep track of
     t_so_far = 0
@@ -314,7 +309,7 @@ function learn(ppo_network::PPO)
         # perform rollout to collect experience batch
         batch_obs, batch_acts, batch_log_probs, batch_rtgo, batch_lens, batch_dones = rollout(ppo_network)
 
-        indices = rand(1:length(batch_obs), 200)
+        indices = rand(1:length(batch_obs), min(mini_batch_size, 250)) # causes issues if mini batch size is too big... why? idk
         minibatch_obs = [batch_obs[i] for i in indices]
         minibatch_acts = [batch_acts[i] for i in indices]
         minibatch_log_probs = [batch_log_probs[i] for i in indices]
@@ -325,25 +320,23 @@ function learn(ppo_network::PPO)
         i_so_far += 1
     
         # update actor and critic network parameters
-        # for _ in 1:updates_per_iteration
-        if i_so_far % 5 == 0
+        if i_so_far % update_interval == 0
             actor_gs = gradient(() -> actor_loss_fn(ppo_network, minibatch_obs, minibatch_acts, minibatch_log_probs, minibatch_rtgo), params(ppo_network.actor.model, ppo_network.actor.μ, ppo_network.actor.logstd))
             update!(actor_opt, params(ppo_network.actor.model, ppo_network.actor.μ, ppo_network.actor.logstd), actor_gs)
 
             critic_gs = gradient(() -> critic_loss_fn(ppo_network, minibatch_obs, minibatch_rtgo), params(ppo_network.critic.model))
             update!(critic_opt, params(ppo_network.critic.model), critic_gs)
 
-            soft_update!(ppo_network.target_critic, ppo_network.critic, 0.01)
-            soft_update!(ppo_network.target_actor, ppo_network.actor, 0.01)
+            soft_update!(ppo_network.target_critic, ppo_network.critic, soft_update_coeff)
+            soft_update!(ppo_network.target_actor, ppo_network.actor, soft_update_coeff)
         end
 
         ignore() do
             push!(ppo_network.actor_loss, actor_loss_fn(ppo_network, batch_obs, batch_acts, batch_log_probs, batch_rtgo))
             push!(ppo_network.critic_loss, critic_loss_fn(ppo_network, batch_obs, batch_rtgo))
         end
-
         
-        if i_so_far % 500 == 0
+        if i_so_far % 1000 == 0
             batch_env, rewards = _run(ppo_network)
             push!(policy_rewards, rewards)
 
@@ -377,7 +370,7 @@ function learn(ppo_network::PPO)
 end
 
 ## test network
-function ppo_test(ppo::PPO; n_episodes = 1000)
+function ppo_test(ppo::PPO; n_episodes = 1000, rng=nothing)
     rewards = Vector{Float32}()
     batch_lens = Vector{Int64}()
     episode_env = Vector{DroneEnv}()
@@ -386,7 +379,13 @@ function ppo_test(ppo::PPO; n_episodes = 1000)
     batch_acts = Vector{Vector{DroneAction}}()
     dones = 0
 
+    if !isnothing(rng)
+        env = DroneEnv(rng=rng)
+        ppo.env = env
+    end
+
     for _ in 1:n_episodes
+
         reset!(ppo.env)
         empty!(episode_env)
         empty!(episode_acts)
@@ -416,7 +415,44 @@ function ppo_test(ppo::PPO; n_episodes = 1000)
         push!(rewards, ep_rewards)
         push!(batch_lens, ep_len)
     end
-    return rewards, batch_lens, batch_env, batch_acts, dones
+
+    h_rewards = Vector{Float32}()
+    h_batch_lens = Vector{Int64}()
+    h_episode_env = Vector{DroneEnv}()
+    h_batch_env = Vector{Vector{DroneEnv}}()
+    h_dones = 0
+    h_ep_rewards = 0.0
+    h_ep_len = 0
+    for _ in 1:n_episodes
+
+        reset!(ppo.env)
+
+        empty!(h_episode_env)
+
+        h_ep_rewards = 0.0
+        h_ep_len = 0
+
+        for t in 1:ppo.hyperparameters["max_timesteps_per_episode"]
+            accel, rotate = heuristic_policy(ppo.env)
+            action = DroneAction(accel, rotate)
+            sp_, r_, done_ = gen(ppo.env, action)
+
+            # add env to batch
+            push!(h_episode_env, deepcopy(ppo.env))
+            h_ep_rewards += r_
+            h_ep_len = t
+            if done_
+                if isterminal(ppo.env) == 1
+                    h_dones += 1
+                end
+                break
+            end
+        end
+        push!(h_batch_env, deepcopy(h_episode_env))
+        push!(h_rewards, h_ep_rewards)
+        push!(h_batch_lens, h_ep_len)
+    end
+    return rewards, batch_lens, batch_env, batch_acts, dones, h_rewards, h_batch_lens, h_batch_env, h_dones
 end
 
 end # module

@@ -58,6 +58,7 @@ end
 
 # environment constructor
 function DroneEnv(;
+        rng = MersenneTwister(1),
         size = DEFAULT_SIZE,
         drone = DroneState(DEFAULT_STATE...),
         target_radius = DEFAULT_TARGET_RADIUS,
@@ -69,10 +70,9 @@ function DroneEnv(;
         )
     initial_state = drone
     ## for testing purposes
-    rng = MersenneTwister(1)
-
-    ## set random target location
-    target_x, target_y = rand(rng, 1:STEP_SIZE:size[1]), rand(1:STEP_SIZE:size[2])
+    
+    ## set target location
+    target_x, target_y = 40, 40 #rand(rng, 1:STEP_SIZE:size[1]), rand(1:STEP_SIZE:size[2])
     target = Target(target_x, target_y, target_radius)
 
     ## define random obstacles
@@ -95,7 +95,7 @@ function generate_obstacles(size::Tuple{Float64, Float64}, num_obstacles::Int64,
         obstacle_r = rand(rng, min_radius:STEP_SIZE:max_radius)
 
         ## if target and obstacle regions overlap, generate new obstacle
-        while norm([target.x, target.y] - [obstacle_x, obstacle_y]) < target.r + obstacle_r
+        while norm([target.x, target.y] - [obstacle_x, obstacle_y]) < target.r + obstacle_r || norm([10.0, 10.0] - [obstacle_x, obstacle_y]) < obstacle_r + 5
             obstacle_x, obstacle_y = rand(rng, 1:STEP_SIZE:size[1]), rand(rng, 1:STEP_SIZE:size[2])
             obstacle_r = rand(rng, min_radius:STEP_SIZE:max_radius)
         end
@@ -112,7 +112,7 @@ end
 function POMDPs.transition(env::DroneEnv, action::DroneAction)
     # scale actions
     accel = action.accel
-    rotate = action.rotate/2
+    rotate = action.rotate/5
 
     # update heading angle
     theta_new = env.drone.theta + clamp(rotate, -env.max_rotation_rate, env.max_rotation_rate)
@@ -184,25 +184,15 @@ end
 ### reward function
 function POMDPs.reward(env::DroneEnv)
     distance_to_target = get_distance([env.drone.x, env.drone.y], [env.target.x, env.target.y])
-    r_distance = 0.0
-    if distance_to_target <= 5.0
-        r_distance = 50.0
-    end
-    if distance_to_target <= 10.0
-        r_distance = 25.0
-    end
-    if distance_to_target <= 20.0
-        r_distance = 2.0
-    end
 
     if isterminal(env) == 1
-        return 1000.0
+        return 1000.0 
     elseif isterminal(env) == 2
-        return -500.0 + r_distance 
+        return -distance_to_target-100
     elseif isterminal(env) == 3
-        return -1000.0 + r_distance
+        return -distance_to_target
     else
-        return -1.0 + r_distance
+        return -distance_to_target
     end
 end
 
@@ -254,7 +244,7 @@ function heuristic_policy(env::DroneEnv)
     end
     rotate = angle_to_target - env.drone.theta
 
-    return DroneAction(accel, rotate)
+    return accel, rotate
 end
 
 

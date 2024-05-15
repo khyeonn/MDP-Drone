@@ -42,7 +42,8 @@ for _ in 1:max_t
 
     # choose action from policy. available: random, heuristic_policy()
     # action = Drone.random_policy()
-    action = Drone.heuristic_policy(env)
+    accel, rotate = Drone.heuristic_policy(env)
+    action = DroneAction(accel, rotate)
 
     # forward step env
     sp_, r_, done_ = gen(env, action)
